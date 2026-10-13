@@ -1,0 +1,6 @@
+# Data sumber berisi harga modal & supplier — JANGAN di-commit
+source/
+*.xlsx
+*.csv
+__pycache__/
+.DS_Store
