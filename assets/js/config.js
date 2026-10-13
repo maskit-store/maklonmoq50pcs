@@ -16,6 +16,7 @@ window.MG_CONFIG = {
   fees: {
     bpomLabPerSku: 3500000,
     halalPerSku: 3500000,
+    samplePerSku: 555000, // request sample, sudah termasuk PPN
   },
 
   // (Opsional) URL Web App Google Apps Script untuk menyimpan order otomatis ke Google Sheet.

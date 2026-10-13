@@ -61,7 +61,8 @@
     const unit = round > 1 ? Math.ceil(rawUnit / round) * round : Math.round(rawUnit);
     const bpom = item.bpom ? ovr(adj, "bpom") ?? num(st.bpomLabPerSku) : 0;
     const halal = item.halal ? ovr(adj, "halal") ?? num(st.halalPerSku) : 0;
-    return { lines, qty, unit, rawUnit, production: unit * qty, bpom, halal, total: unit * qty + bpom + halal };
+    const sample = item.sample ? ovr(adj, "sample") ?? num(st.samplePerSku, 555000) : 0;
+    return { lines, qty, unit, rawUnit, production: unit * qty, bpom, halal, sample, total: unit * qty + bpom + halal + sample };
   }
 
   function computeOrder(order, prices) {
@@ -72,7 +73,9 @@
     const shipping = num(adj.shipping);
     const total = Math.max(0, subtotal - discount + shipping);
     const dpPct = num(prices.settings.dpPercent, 0);
-    return { skus, subtotal, discount, shipping, total, dp: Math.round((total * dpPct) / 100), dpPct };
+    // DP dihitung dari nilai order tanpa ongkir; ongkir ditagih saat pelunasan
+    const dp = Math.round((Math.max(0, total - shipping) * dpPct) / 100);
+    return { skus, subtotal, discount, shipping, total, dp, dpPct, balance: total - dp };
   }
 
   window.MGP = { decryptPrices, encryptPrices, computeSku, computeOrder };

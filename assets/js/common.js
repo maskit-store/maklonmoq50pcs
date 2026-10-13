@@ -53,9 +53,9 @@
   function packOrder(order) {
     const compact = {
       i: order.id, t: order.createdAt, v: order.catalogVersion,
-      c: [order.customer.name, order.customer.phone, order.customer.email, order.customer.city, order.customer.brand, order.customer.notes],
+      c: [order.customer.name, order.customer.phone, order.customer.email, order.customer.city, order.customer.brand, order.customer.notes, order.customer.brandNote || ""],
       s: order.items.map((it) => [it.baseId, it.variant || "", it.vol, it.qty, it.actives, it.customActives || "",
-        it.noPackaging ? "" : it.packagingId, it.packagingNote || "", it.productName || "", [it.sticker ? 1 : 0, it.bpom ? 1 : 0, it.halal ? 1 : 0]]),
+        it.noPackaging ? "" : it.packagingId, it.packagingNote || "", it.productName || "", [it.sticker ? 1 : 0, it.bpom ? 1 : 0, it.halal ? 1 : 0, it.sample ? 1 : 0]]),
     };
     return LZString.compressToEncodedURIComponent(JSON.stringify(compact));
   }
@@ -63,16 +63,16 @@
   function unpackOrder(str) {
     const o = JSON.parse(LZString.decompressFromEncodedURIComponent(str));
     if (!o || !o.i) throw new Error("Data order tidak valid");
-    const [name, phone, email, city, brand, notes] = o.c;
+    const [name, phone, email, city, brand, notes, brandNote = ""] = o.c;
     return {
       id: o.i, createdAt: o.t, catalogVersion: o.v,
-      customer: { name, phone, email, city, brand, notes },
+      customer: { name, phone, email, city, brand, brandNote, notes },
       items: o.s.map((s) => {
         const base = IDX.bases[s[0]];
         return {
           baseId: s[0], baseName: base ? base.name : s[0], variant: s[1], vol: s[2], qty: s[3], unit: base ? base.unit : "ml",
           actives: s[4], customActives: s[5], packagingId: s[6] || null, noPackaging: !s[6], packagingNote: s[7],
-          productName: s[8], sticker: !!s[9][0], bpom: !!s[9][1], halal: !!s[9][2],
+          productName: s[8], sticker: !!s[9][0], bpom: !!s[9][1], halal: !!s[9][2], sample: !!s[9][3],
         };
       }),
     };
@@ -95,6 +95,7 @@
     L.push(`Email: ${order.customer.email}`);
     L.push(`Kota: ${order.customer.city}`);
     L.push(`Nama Brand: ${order.customer.brand}`);
+    if (order.customer.brandNote) L.push(`Catatan Brand: ${order.customer.brandNote}`);
     if (order.customer.notes) L.push(`Catatan: ${order.customer.notes}`);
     let pcs = 0;
     order.items.forEach((it, i) => {
@@ -112,10 +113,11 @@
       L.push(`• Kemasan: ${packagingLabel(it)}`);
       if (it.packagingNote) L.push(`  Catatan kemasan: ${it.packagingNote}`);
       L.push(`• Sticker ${it.sticker ? "✅" : "❌"} | BPOM & Lab ${it.bpom ? "✅" : "❌"} | Halal ${it.halal ? "✅" : "❌"}`);
+      L.push(`• Request sample: ${it.sample ? "Ya" : "Tidak"}`);
     });
     L.push("");
     L.push(`Total: ${order.items.length} SKU, ${pcs} pcs`);
-    L.push("Mohon dibuatkan invoice. Terima kasih 🙏");
+    L.push("Saya sudah membaca info pembayaran (DP 50%, pelunasan + ongkir setelah NIE BPOM terbit). Mohon dibuatkan invoice & MoU. Terima kasih 🙏");
     if (withLink) {
       L.push("");
       L.push("_(Link khusus admin untuk rekam order:)_");

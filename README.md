@@ -13,8 +13,11 @@ Web app statis (HTML/CSS/JS, tanpa server) untuk order maklon skincare & persona
 2. **Ukuran & jumlah** — volume akhir per produk + jumlah (min. 50 pcs).
 3. **Bahan aktif tambahan** — 52 bahan aktif dengan kategori (Brightening, Calming, Hydrating, Anti-Acne, dll.; satu bahan bisa di beberapa kategori) + kolom request bahan aktif lain.
 4. **Kemasan** — 900 pilihan kemasan beserta gambar (dari folder Google Drive), filter "sesuai volume", jenis, dan pencarian. Ada opsi **"Tidak ada pilihan kemasan, Admin bantu carikan yang lain"**.
-5. **Legalitas (wajib dicentang)** — Sticker, Biaya BPOM & Lab (Rp 3.500.000/SKU), Halal (Rp 3.500.000/SKU).
-6. Simpan SKU → bisa **tambah SKU lain** (kembali ke langkah 1) → **Data diri** (Nama, HP, Email, Kota, Nama Brand, Catatan) → **Kirim via WhatsApp** dengan **nomor order** otomatis (`MG-YYMMDD-XXXXX`).
+5. **Legalitas (wajib dicentang)** — Sticker, Biaya BPOM & Lab (Rp 3.500.000/SKU), Halal (Rp 3.500.000/SKU) + nama produk (wajib).
+6. **Request sample?** — Ya (Rp 555.000/SKU, incl. PPN) / Tidak.
+7. Simpan SKU → bisa **tambah SKU lain** (kembali ke langkah 1) → **Data diri** (Nama, HP, Email, Kota, Nama Brand, **Catatan Brand** — wajib, Catatan lain) → info pembayaran (harga via invoice, belum termasuk ongkir, DP 50%, pelunasan + ongkir setelah NIE BPOM terbit, MoU bermeterai) yang wajib disetujui → **Kirim via WhatsApp** dengan **nomor order** otomatis (`MG-YYMMDD-XXXXX`).
+
+Pilihan volume hanya volume yang tersedia kemasannya (10–1000 ml/g).
 
 ## Rumus harga (hanya di dashboard admin)
 
@@ -24,7 +27,10 @@ Web app statis (HTML/CSS/JS, tanpa server) untuk order maklon skincare & persona
 | Bahan aktif | harga master ÷ per_qty (= harga/gram, berat = volume) × (volume × **1%**) × **1,35** (scrap factor) |
 | Kemasan | harga di nama file gambar × **1,35** |
 | Sticker | diatur di Pengaturan (default Rp 0) |
-| Per SKU | harga/pcs × qty + BPOM & Lab + Halal |
+| Per SKU | harga/pcs × qty + BPOM & Lab + Halal + sample (jika dipilih) |
+| DP | 50% dari total (tanpa ongkir); pelunasan = sisa + ongkir setelah NIE BPOM terbit |
+
+PDF invoice otomatis berisi **lembar MoU** (10 pasal, termasuk sanksi Rp 1 miliar + proses hukum untuk penyalahgunaan izin edar / pemalsuan produk), kolom tanda tangan kedua pihak dengan kotak meterai Rp 10.000, dan instruksi mengirim kembali MoU bertanda tangan ke WA admin. Isi nama penandatangan, jabatan & kota pengadilan di **Pengaturan**.
 
 Semua angka bisa diubah di dashboard (master harga & per order), plus diskon, ongkir, DP%.
 

@@ -2,8 +2,8 @@
 (function () {
   const { C, CFG, IDX, esc, store, toast } = window.MG;
   const MOQ = CFG.moq || 50;
-  const STEPS = ["base", "size", "actives", "pack", "legal"];
-  const STEP_TITLES = { base: "Base Produk", size: "Ukuran & Jumlah", actives: "Bahan Aktif", pack: "Kemasan", legal: "Legalitas" };
+  const STEPS = ["base", "size", "actives", "pack", "legal", "sample"];
+  const STEP_TITLES = { base: "Base Produk", size: "Ukuran & Jumlah", actives: "Bahan Aktif", pack: "Kemasan", legal: "Legalitas", sample: "Sample" };
   const PAGE = 24;
 
   const app = document.getElementById("app");
@@ -13,7 +13,7 @@
   const barSummary = document.getElementById("barSummary");
 
   const emptyDraft = () => ({ baseId: null, variant: "", vol: null, qty: MOQ, actives: [], customActives: "", packagingId: null,
-    noPackaging: false, packagingNote: "", productName: "", sticker: false, bpom: false, halal: false, editIndex: null });
+    noPackaging: false, packagingNote: "", productName: "", sticker: false, bpom: false, halal: false, sample: null, editIndex: null });
 
   const saved = store.get("mg_state", null);
   const S = Object.assign({ view: "home", draft: emptyDraft(), cart: [], customer: {}, lastOrder: null },
@@ -100,10 +100,12 @@
       <div class="list">${items || '<p class="muted">Tidak ada base yang cocok.</p>'}</div>`;
   }
 
-  function volumeOptions() {
-    const set = new Set(C.packaging.filter((p) => p.vol && p.vol <= 1000).map((p) => p.vol));
-    if (base()) set.add(base().vol);
-    return [...set].sort((a, b) => a - b);
+  // Hanya volume yang tersedia kemasannya
+  const VOLS = [...new Set(C.packaging.filter((p) => p.vol && p.vol <= 1000).map((p) => p.vol))].sort((a, b) => a - b);
+  function volumeOptions() { return VOLS; }
+  // Volume kemasan terdekat dengan ukuran asli base (seri → pilih yang lebih besar)
+  function defaultVol(b) {
+    return VOLS.reduce((best, v) => (Math.abs(v - b.vol) < Math.abs(best - b.vol) || (Math.abs(v - b.vol) === Math.abs(best - b.vol) && v > best) ? v : best), VOLS[0]);
   }
 
   function viewSize() {
@@ -111,15 +113,12 @@
     const vols = volumeOptions();
     const counts = {};
     C.packaging.forEach((p) => { if (p.vol) counts[p.vol] = (counts[p.vol] || 0) + 1; });
-    const custom = S.draft.vol && !vols.includes(S.draft.vol);
-    return `${stepHead("size", `Tentukan volume per produk dan jumlah yang dipesan (min. ${MOQ} pcs).`)}
+    return `${stepHead("size", `Pilih volume per produk dan jumlah yang dipesan (min. ${MOQ} pcs).`)}
       <div class="card" style="margin-bottom:14px">
-        <div class="field"><label>Volume per produk (${b.unit})</label>
-          <div class="vol-grid">${vols.map((v) => `<button class="vol-btn ${S.draft.vol === v ? "active" : ""}" data-vol="${v}">${v}<small>${v === b.vol ? "ukuran asli" : (counts[v] || 0) + " kemasan"}</small></button>`).join("")}</div>
+        <div class="field" style="margin:0"><label>Volume per produk (${b.unit})</label>
+          <div class="hint" style="margin:-2px 0 10px">Pilihan volume mengikuti ukuran kemasan yang tersedia.</div>
+          <div class="vol-grid">${vols.map((v) => `<button class="vol-btn ${S.draft.vol === v ? "active" : ""}" data-vol="${v}">${v}<small>${(counts[v] || 0) + " kemasan"}${v === b.vol ? " · asli" : ""}</small></button>`).join("")}</div>
         </div>
-        <div class="field"><label for="volCustom">Ukuran lain</label>
-          <input id="volCustom" type="number" inputmode="numeric" min="1" placeholder="Contoh: 35" value="${custom ? S.draft.vol : ""}">
-          <div class="hint">Isi jika ukuran yang kamu mau tidak ada di atas.</div></div>
       </div>
       <div class="card">
         <div class="field" style="margin:0"><label for="qty">Jumlah pesanan (pcs)</label>
@@ -230,10 +229,21 @@
       ${row("bpom", `Biaya BPOM & Lab <span class="fee">(${rp(f.bpomLabPerSku)} / SKU)</span>`, "Pendaftaran notifikasi BPOM dan uji laboratorium.")}
       ${row("halal", `Sertifikasi Halal <span class="fee">(${rp(f.halalPerSku)} / SKU)</span>`, "Pengurusan sertifikat halal produk.")}
       <div class="card" style="margin-top:14px">
-        <div class="field" style="margin:0"><label for="productName">Nama produk di brand kamu (opsional)</label>
+        <div class="field" style="margin:0"><label for="productName">Nama produk <span class="req" style="color:var(--danger)">*</span></label>
           <input id="productName" placeholder="Contoh: Glow Serum by NamaBrand" value="${esc(S.draft.productName)}">
-          <div class="hint">Membantu admin membedakan tiap SKU.</div></div>
+          <div class="hint">Nama produk yang akan tertulis di label (wajib).</div></div>
       </div>`;
+  }
+
+  const rpx = (n) => "Rp " + Number(n).toLocaleString("id-ID");
+
+  function viewSample() {
+    const d = S.draft;
+    const opt = (val, title, sub) => `<button class="option ${d.sample === val ? "selected" : ""}" data-sample="${val ? 1 : 0}" style="margin-bottom:10px">
+      <span class="check">${d.sample === val ? icon.check : ""}</span><div class="title">${title}</div><div class="sub">${sub}</div></button>`;
+    return `${stepHead("sample", "Mau coba sample produk dulu sebelum produksi massal?")}
+      ${opt(true, `Ya, request sample <span class="badge">${rpx(CFG.fees.samplePerSku)} / SKU</span>`, "Harga sudah termasuk PPN. Sample dibuat sesuai pilihan base, bahan aktif & kemasan SKU ini.")}
+      ${opt(false, "Tidak, langsung produksi", "Produksi dijalankan tanpa sample terlebih dahulu.")}`;
   }
 
   function skuCard(it, i) {
@@ -247,6 +257,7 @@
         <dt>Bahan aktif</dt><dd>${act.length ? esc(act.join(", ")) : "—"}${it.customActives ? `<br><span class="muted">Request: ${esc(it.customActives)}</span>` : ""}</dd>
         <dt>Kemasan</dt><dd>${esc(window.MG.packagingLabel(it))}</dd>
         <dt>Legalitas</dt><dd>Sticker ✓ · BPOM & Lab ✓ · Halal ✓</dd>
+        <dt>Sample</dt><dd>${it.sample ? `Ya (${rpx(CFG.fees.samplePerSku)})` : "Tidak"}</dd>
       </dl>
       <div class="sku-actions"><button class="btn btn-ghost btn-sm" data-edit="${i}">Ubah</button><button class="btn btn-ghost btn-sm" data-dup="${i}">Duplikat</button><button class="btn btn-danger btn-sm" data-del="${i}">Hapus</button></div>
     </div>`;
@@ -274,9 +285,22 @@
           ${f("city", "Kota", "text", "Contoh: Bandung", true, 'autocomplete="address-level2"')}
           ${f("brand", "Nama brand", "text", "Nama brand kamu")}
         </div>
-        <div class="field" id="f-notes" style="margin:0"><label for="c-notes">Catatan</label><textarea id="c-notes" placeholder="Target launching, referensi produk, dll.">${esc(c.notes || "")}</textarea></div>
+        <div class="field" id="f-brandNote"><label for="c-brandNote">Catatan Brand <span class="req">*</span></label>
+          <textarea id="c-brandNote" placeholder="Contoh: Brand skincare lokal untuk remaja dengan kulit berminyak, konsep natural & minimalis, target harga jual Rp 50–80 ribu.">${esc(c.brandNote || "")}</textarea>
+          <div class="hint">Jelaskan secara singkat konsep brand kamu: target pasar, positioning, karakter/nuansa brand, dan kisaran harga jual.</div><div class="err hidden"></div></div>
+        <div class="field" id="f-notes" style="margin:0"><label for="c-notes">Catatan lain (opsional)</label><textarea id="c-notes" placeholder="Target launching, referensi produk, dll.">${esc(c.notes || "")}</textarea></div>
       </div>
-      <p class="small muted" style="margin-top:12px">Dengan menekan "Kirim via WhatsApp", data pesanan dikirim ke admin ${esc(CFG.appName)} bersama nomor order. Harga akan diinformasikan melalui invoice.</p>`;
+      <div class="card" style="margin-top:14px;background:var(--accent-soft);border-color:#f3dc9a">
+        <h3 style="margin:0 0 8px;font-size:16px">Informasi harga & pembayaran</h3>
+        <ul style="margin:0;padding-left:18px;font-size:13.5px;line-height:1.6">
+          <li><b>Harga total akan diinformasikan oleh admin melalui invoice.</b></li>
+          <li>Harga di invoice <b>belum termasuk ongkos kirim</b>. Ongkos kirim dibayarkan saat produk sudah ready.</li>
+          <li>Pembayaran: <b>DP 50%</b> di awal. Setelah <b>nomor izin edar BPOM</b> terbit, dilakukan <b>pelunasan sisa 50% + ongkos kirim</b>.</li>
+          <li>Invoice disertai <b>lembar MoU</b> yang wajib ditandatangani di atas <b>materai Rp 10.000</b> lalu dikirim kembali ke WhatsApp admin.</li>
+        </ul>
+      </div>
+      <label class="checkrow ${c.agree ? "on" : ""}" id="f-agree" style="margin-top:12px"><input type="checkbox" id="c-agree" ${c.agree ? "checked" : ""}><span><b>Saya sudah membaca & menyetujui informasi di atas</b><span class="small muted err hidden" style="display:block;color:var(--danger)"></span></span></label>
+      <p class="small muted" style="margin-top:4px">Dengan menekan "Kirim via WhatsApp", data pesanan dikirim ke admin ${esc(CFG.appName)} bersama nomor order.</p>`;
   }
 
   function viewSuccess() {
@@ -306,7 +330,11 @@
       case "size": return { ok: d.vol > 0 && Number(d.qty) >= MOQ, label: "Lanjut", sum: `<b>${esc(b.name)}</b>${d.vol ? d.vol + " " + b.unit : "Pilih volume"} · ${d.qty} pcs` };
       case "actives": return { ok: true, label: d.actives.length ? "Lanjut" : "Lewati", sum: `<b>${d.actives.length} bahan aktif dipilih</b>${esc(b.name)} ${d.vol} ${b.unit}` };
       case "pack": return { ok: d.noPackaging || !!d.packagingId, label: "Lanjut", sum: d.noPackaging ? "<b>Admin bantu carikan</b>Kemasan" : d.packagingId ? `<b>${esc(IDX.packaging[d.packagingId].code)}</b>${esc(IDX.packaging[d.packagingId].name)}` : "Pilih 1 kemasan" };
-      case "legal": return { ok: d.sticker && d.bpom && d.halal, label: d.editIndex != null ? "Simpan SKU" : "Simpan SKU", sum: d.sticker && d.bpom && d.halal ? "<b>Siap disimpan</b>Semua sudah dicentang" : "<b>Centang semua</b>Wajib untuk setiap SKU" };
+      case "legal": {
+        const okL = d.sticker && d.bpom && d.halal, okN = (d.productName || "").trim().length >= 2;
+        return { ok: okL && okN, label: "Lanjut", sum: !okL ? "<b>Centang semua</b>Wajib untuk setiap SKU" : !okN ? "<b>Isi nama produk</b>Wajib diisi" : "<b>Legalitas lengkap</b>Lanjut ke sample" };
+      }
+      case "sample": return { ok: d.sample !== null, label: "Simpan SKU", sum: d.sample === null ? "<b>Pilih salah satu</b>Request sample?" : d.sample ? "<b>Dengan sample</b>" + rpx(CFG.fees.samplePerSku) + " / SKU" : "<b>Tanpa sample</b>Langsung produksi" };
       case "cart": return { ok: S.cart.length > 0, label: "Isi Data Diri", sum: `<b>${S.cart.length} SKU</b>${S.cart.reduce((s, x) => s + Number(x.qty), 0)} pcs` };
       case "customer": return { ok: true, label: "Kirim via WhatsApp", sum: `<b>${S.cart.length} SKU</b>Cek data lalu kirim` };
       default: return null;
@@ -326,7 +354,7 @@
 
   function render() {
     const v = S.view;
-    const views = { home: viewHome, base: viewBase, size: viewSize, actives: viewActives, pack: viewPack, legal: viewLegal, cart: viewCart, customer: viewCustomer, success: viewSuccess };
+    const views = { home: viewHome, base: viewBase, size: viewSize, actives: viewActives, pack: viewPack, legal: viewLegal, sample: viewSample, cart: viewCart, customer: viewCustomer, success: viewSuccess };
     if (STEPS.includes(v) && v !== "base" && !base()) S.view = "base";
     app.className = "container page";
     app.innerHTML = (views[S.view] || viewHome)();
@@ -347,11 +375,11 @@
   /* ------------------------------------------------------------ actions */
   function next() {
     const v = S.view;
-    if (v === "legal") return saveSku();
+    if (v === "sample") return saveSku();
     if (v === "cart") return go("customer");
     if (v === "customer") return submit();
     const i = STEPS.indexOf(v);
-    if (v === "base" && !S.draft.vol) S.draft.vol = base().vol;
+    if (v === "base" && !VOLS.includes(S.draft.vol)) S.draft.vol = defaultVol(base());
     if (v === "size") { ui.packFilter = "match"; ui.packType = "all"; ui.packQ = ""; ui.packLimit = PAGE; }
     go(STEPS[i + 1]);
   }
@@ -359,7 +387,7 @@
   function back() {
     const v = S.view;
     if (v === "customer") return go("cart");
-    if (v === "cart") return go(S.draft.baseId ? "legal" : "home");
+    if (v === "cart") return go(S.draft.baseId ? "sample" : "home");
     const i = STEPS.indexOf(v);
     if (i <= 0) return go(S.cart.length ? "cart" : "home");
     go(STEPS[i - 1]);
@@ -386,10 +414,12 @@
       email: (v) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v.trim()) || "Email tidak valid",
       city: (v) => v.trim().length >= 2 || "Kota wajib diisi",
       brand: (v) => v.trim().length >= 1 || "Nama brand wajib diisi",
+      brandNote: (v) => v.trim().length >= 10 || "Ceritakan singkat konsep brand kamu (min. 10 karakter)",
+      agree: (v) => v === true || "Centang persetujuan untuk melanjutkan",
     };
     let first = null;
     for (const [k, fn] of Object.entries(rules)) {
-      const r = fn(c[k] || "");
+      const r = fn(k === "agree" ? !!c.agree : c[k] || "");
       const box = document.getElementById("f-" + k);
       box.classList.toggle("invalid", r !== true);
       const err = box.querySelector(".err");
@@ -408,7 +438,7 @@
       id: window.MG.newOrderId(),
       createdAt: new Date().toISOString(),
       catalogVersion: C.version,
-      customer: { name: c.name.trim(), phone: c.phone.trim(), email: c.email.trim(), city: c.city.trim(), brand: c.brand.trim(), notes: (c.notes || "").trim() },
+      customer: { name: c.name.trim(), phone: c.phone.trim(), email: c.email.trim(), city: c.city.trim(), brand: c.brand.trim(), brandNote: (c.brandNote || "").trim(), notes: (c.notes || "").trim() },
       items: S.cart.map((x) => ({ ...x })),
     };
     const msg = window.MG.orderMessage(order);
@@ -437,16 +467,17 @@
   btnBack.addEventListener("click", back);
 
   document.addEventListener("click", (e) => {
-    const t = e.target.closest("[data-go],[data-basecat],[data-base],[data-variant],[data-vol],[data-qty],[data-qtyset],[data-actcat],[data-active],[data-packfilter],[data-packtype],[data-pack],[data-nopack],[data-more],[data-edit],[data-dup],[data-del],[data-newsku],[data-restart]");
+    const t = e.target.closest("[data-go],[data-sample],[data-basecat],[data-base],[data-variant],[data-vol],[data-qty],[data-qtyset],[data-actcat],[data-active],[data-packfilter],[data-packtype],[data-pack],[data-nopack],[data-more],[data-edit],[data-dup],[data-del],[data-newsku],[data-restart]");
     if (!t) return;
     const d = S.draft, ds = t.dataset;
     if (ds.go) { e.preventDefault(); if (ds.go === "base" && S.view === "home") { if (d.editIndex == null && !d.baseId) S.draft = emptyDraft(); } return go(ds.go); }
+    if (ds.sample !== undefined) { d.sample = ds.sample === "1"; persist(); return render(); }
     if (ds.basecat) { ui.baseCat = ds.basecat; return render(); }
     if (ds.base) {
       if (e.target.closest("[data-stop]")) return;
       if (d.baseId !== ds.base) {
         const b = IDX.bases[ds.base];
-        Object.assign(d, { baseId: ds.base, variant: (b.variants || []).length === 1 ? b.variants[0].name : "", vol: b.vol, actives: [], packagingId: null, noPackaging: false });
+        Object.assign(d, { baseId: ds.base, variant: (b.variants || []).length === 1 ? b.variants[0].name : "", vol: b.vol, vol: defaultVol(b), actives: [], packagingId: null, noPackaging: false });
       }
       persist(); render();
       const el = document.querySelector(`[data-base="${ds.base}"]`);
@@ -480,12 +511,16 @@
     if (t.id === "baseQ") { ui.baseQ = t.value; return rerenderKeepFocus("baseQ"); }
     if (t.id === "actQ") { ui.actQ = t.value; return rerenderKeepFocus("actQ"); }
     if (t.id === "packQ") { ui.packQ = t.value; ui.packLimit = PAGE; return rerenderKeepFocus("packQ"); }
-    if (t.id === "volCustom") { const v = Number(t.value); if (v > 0) { d.vol = v; d.packagingId = null; } document.querySelectorAll(".vol-btn").forEach((b) => b.classList.toggle("active", Number(b.dataset.vol) === d.vol)); persist(); return updateBar(); }
     if (t.id === "qty") { d.qty = Math.floor(Number(t.value) || 0); document.getElementById("qtyErr").classList.toggle("hidden", d.qty >= MOQ); persist(); return updateBar(); }
     if (t.id === "customActives") { d.customActives = t.value; return persist(); }
     if (t.id === "packNote") { d.packagingNote = t.value; return persist(); }
-    if (t.id === "productName") { d.productName = t.value; return persist(); }
+    if (t.id === "productName") { d.productName = t.value; persist(); return updateBar(); }
     if (t.dataset.legal) { d[t.dataset.legal] = t.checked; t.closest(".checkrow").classList.toggle("on", t.checked); persist(); return updateBar(); }
+    if (t.id && t.id.startsWith("c-")) {
+      const box = document.getElementById("f-" + t.id.slice(2));
+      if (box) { box.classList.remove("invalid"); const er = box.querySelector(".err"); if (er) er.classList.add("hidden"); }
+    }
+    if (t.id === "c-agree") { S.customer.agree = t.checked; t.closest(".checkrow").classList.toggle("on", t.checked); return persist(); }
     if (t.id && t.id.startsWith("c-")) { S.customer[t.id.slice(2)] = t.value; persist(); }
   });
   document.addEventListener("change", (e) => {
