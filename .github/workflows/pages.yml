@@ -9,6 +9,7 @@ on:
 
 permissions:
   contents: write
+  pages: write
 
 concurrency:
   group: pages
@@ -23,3 +24,8 @@ jobs:
           fetch-depth: 0
       - name: Push main ke gh-pages
         run: git push --force origin HEAD:refs/heads/gh-pages
+      # Push dari GITHUB_TOKEN tidak selalu memicu build Pages → minta build secara eksplisit
+      - name: Minta GitHub Pages build ulang
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api -X POST "repos/${{ github.repository }}/pages/builds"
