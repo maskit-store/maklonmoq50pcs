@@ -54,7 +54,9 @@ Edit [`assets/js/config.js`](assets/js/config.js):
 
 ## Preview di GitHub Pages
 
-Settings → **Pages** → Source: **GitHub Actions**. Workflow `.github/workflows/pages.yml` akan deploy otomatis setiap push. URL: `https://<user>.github.io/<repo>/` (admin: `/admin.html`).
+Preview: **https://maskit-store.github.io/maklonmoq50pcs/** (admin: `/admin.html`).
+
+GitHub Pages menyajikan branch `gh-pages`. Workflow `.github/workflows/pages.yml` menyalin `main` ke `gh-pages` setiap ada push ke `main`, jadi cukup update `main` — preview ikut berubah dalam ±1 menit.
 
 ## Update data (base, bahan aktif, kemasan)
 
