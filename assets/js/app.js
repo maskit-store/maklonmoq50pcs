@@ -346,9 +346,14 @@
     }
   }
 
+  // Tombol WhatsApp melayang: chat langsung ke admin dari halaman mana pun
+  const waFloat = document.getElementById("waFloat");
+  waFloat.href = window.MG.waLink(CFG.adminWhatsApp, `Halo admin ${CFG.appName}, saya mau tanya tentang maklon produk MOQ ${MOQ} pcs.`);
+
   function updateBar() {
     const st = barState();
     bar.classList.toggle("hidden", !st);
+    waFloat.classList.toggle("raised", !!st);
     document.body.style.paddingBottom = st ? "0" : "";
     if (!st) return;
     barSummary.innerHTML = st.sum;
