@@ -8,7 +8,7 @@ window.MG_CONFIG = {
 
   // Nomor WhatsApp admin penerima order. Format internasional tanpa "+" / spasi.
   // Contoh: 6281234567890
-  adminWhatsApp: "6281234567890",
+  adminWhatsApp: "6285645024291",
 
   moq: 50,
 

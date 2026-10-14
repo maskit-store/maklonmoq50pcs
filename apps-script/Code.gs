@@ -30,7 +30,7 @@ const DEFAULT_SETTINGS = {
   activeDosePct: 1, activeScrapFactor: 1.35, packagingMarkup: 1.35,
   bpomLabPerSku: 3500000, halalPerSku: 3500000, samplePerSku: 555000, stickerPerPcs: 0,
   roundPerPcs: 1, dpPercent: 50, invoiceDueDays: 7,
-  companyName: APP_NAME, companyAddress: "", companyPhone: "", companyEmail: "",
+  companyName: APP_NAME, companyAddress: "", companyPhone: "6285645024291", companyEmail: "",
   bankInfo: "", signerName: "", signerTitle: "Direktur", courtCity: "",
   invoiceNotes: "Harga belum termasuk ongkos kirim. Ongkos kirim dibayarkan saat produk sudah ready.\n" +
     "Pembayaran: DP 50% untuk memulai proses. Pelunasan sisa 50% + ongkos kirim dilakukan setelah nomor izin edar BPOM terbit.\n" +
@@ -169,6 +169,7 @@ function loadPrices_() {
   if (!id) throw new Error("Harga belum disinkron. Buka dashboard admin → Pengaturan → Sinkron harga ke Google Drive.");
   const p = JSON.parse(DriveApp.getFileById(id).getBlob().getDataAsString());
   p.settings = Object.assign({}, DEFAULT_SETTINGS, p.settings || {});
+  if (!p.settings.companyPhone || p.settings.companyPhone === "6281234567890") p.settings.companyPhone = DEFAULT_SETTINGS.companyPhone;
   return p;
 }
 const num_ = (v, d) => (v === "" || v == null || isNaN(Number(v)) ? (d || 0) : Number(v));

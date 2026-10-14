@@ -60,6 +60,7 @@
     A.prices = local && local.version === filePrices.version ? local : structuredClone(filePrices);
     A.dirty = !!(local && local.version === filePrices.version);
     A.prices.settings = { ...DEFAULT_SETTINGS, ...A.prices.settings };
+    fixPhone(A.prices.settings);
     try { sessionStorage.setItem("mg_pw", pw); } catch {}
     document.getElementById("btnLogout").classList.remove("hidden");
     await loadRemotePrices();
@@ -76,7 +77,12 @@
       Object.entries((remote && remote[sec]) || {}).forEach(([k, v]) => { if (out[sec][k]) out[sec][k] = { ...out[sec][k], ...v }; });
     });
     out.settings = { ...DEFAULT_SETTINGS, ...file.settings, ...((remote && remote.settings) || {}) };
+    fixPhone(out.settings);
     return out;
+  }
+  // Ganti nomor WA contoh lama dengan nomor admin dari config
+  function fixPhone(st) {
+    if (!st.companyPhone || st.companyPhone === "6281234567890") st.companyPhone = CFG.adminWhatsApp;
   }
 
   async function loadRemotePrices() {
