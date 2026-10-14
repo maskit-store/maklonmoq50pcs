@@ -305,8 +305,10 @@ def build_packaging_mp(settings, make_images):
             item["volLabel"] = vlabel
         items.append(item)
         harga, diskon = float(r[15] or 0), float(r[16] or 0)
-        secret[sku] = {"filePrice": round(harga), "supplierDiscountPrice": round(diskon),
-                       "price": round(harga * settings["packagingMarkup"]) if harga else None,
+        # Harga modal = kolom "Diskon" (harga diskon supplier); kolom "Harga" hanya referensi
+        modal = diskon or harga
+        secret[sku] = {"filePrice": round(modal), "supplierListPrice": round(harga),
+                       "price": round(modal * settings["packagingMarkup"]) if modal else None,
                        "file": f"{sku} - {name} - {vol_raw}", "driveId": drive_id, "source": "Produk_MaklonGo_-_Gabungan_SKU.xlsx"}
     return items, secret
 

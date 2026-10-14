@@ -590,9 +590,9 @@
       return `<tr><td><img class="thumb" loading="lazy" src="${p.img || "assets/img/logo-sm.png"}" alt=""></td><td><b>${esc(p.code)}</b> ${p.new ? '<span class="tag new">Baru</span>' : ""} ${flag ? '<span class="flag">• cek harga</span>' : ""}<br><span class="small">${esc(p.name)}</span><br><span class="small muted">${esc(p.variasi)}</span></td>
         <td class="num">${p.vol ? (p.volLabel || p.vol) + " " + p.unit : "-"}</td>
         <td class="num"><input class="inp" type="number" data-packprice="${p.id}" value="${pp.filePrice ?? ""}" placeholder="isi"></td>
-        <td class="num">${pp.price ? rupiah(pp.price) : "-"}${pp.supplierDiscountPrice ? `<br><span class="small muted">Harga diskon supplier: ${rupiah(pp.supplierDiscountPrice)}</span>` : ""}</td></tr>`;
+        <td class="num">${pp.price ? rupiah(pp.price) : "-"}${pp.supplierListPrice ? `<br><span class="small muted">Harga normal supplier: ${rupiah(pp.supplierListPrice)}</span>` : ""}</td></tr>`;
     }).join("");
-    return `<p class="muted small">Harga dari nama file gambar kemasan (kode W…) dan dari Excel katalog baru (kode MP…, kolom "Harga") × ${st.packagingMarkup} (${Math.round((st.packagingMarkup - 1) * 100)}%). Ketik <b>cek</b> di pencarian untuk melihat kemasan yang harganya kosong / tidak wajar.</p>
+    return `<p class="muted small">Harga dari nama file gambar kemasan (kode W…) dan dari Excel katalog baru (kode MP…, kolom "Diskon" = harga diskon supplier) × ${st.packagingMarkup} (${Math.round((st.packagingMarkup - 1) * 100)}%). Ketik <b>cek</b> di pencarian untuk melihat kemasan yang harganya kosong / tidak wajar.</p>
       ${priceSearch("Cari kode / nama kemasan… (ketik: cek)")}
       <div class="table-wrap"><table class="tbl"><thead><tr><th></th><th>Kemasan</th><th class="num">Volume</th><th class="num">Harga file</th><th class="num">Harga jual</th></tr></thead><tbody>${rows}</tbody></table></div>
       ${list.length > A.packLimit ? `<button class="btn btn-ghost load-more" data-act="morepack">Tampilkan lebih banyak (${list.length - A.packLimit})</button>` : ""}`;

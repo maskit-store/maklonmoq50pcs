@@ -25,7 +25,7 @@ Pilihan volume hanya volume yang tersedia kemasannya (10–1000 ml/g).
 |---|---|
 | Base | harga (kolom *Harga diskon* di `discount_nominate`) ÷ volume asli × volume pesanan |
 | Bahan aktif | harga master ÷ per_qty (= harga/gram, berat = volume) × (volume × **1%**) × **1,35** (scrap factor) |
-| Kemasan | W…: harga di nama file gambar × **1,35**; MP…: kolom **Harga** di Excel katalog baru × **1,35** (kolom Diskon ditampilkan sebagai referensi di admin) |
+| Kemasan | W…: harga di nama file gambar × **1,35**; MP…: kolom **Diskon** (harga diskon supplier) di Excel katalog baru × **1,35** (kolom Harga ditampilkan sebagai referensi di admin) |
 | Sticker | diatur di Pengaturan (default Rp 0) |
 | Per SKU | harga/pcs × qty + BPOM & Lab + Halal + sample (jika dipilih) |
 | DP | 50% dari total (tanpa ongkir); pelunasan = sisa + ongkir setelah NIE BPOM terbit |

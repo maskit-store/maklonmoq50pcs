@@ -1,9 +1,11 @@
 /**
- * MaklonGo — backend Google Apps Script (standalone project di script.google.com)
+ * MaklonGo — backend Google Apps Script
  *
  * Setiap order dari web customer:
- *   1) dicatat ke Google Sheet "MaklonGo Orders" (dibuat otomatis)
- *   2) dibuatkan invoice + MoU dalam bentuk PDF → disimpan ke folder Drive INVOICE_FOLDER_ID
+ *   1) dibuatkan invoice + MoU dalam bentuk PDF → disimpan ke folder Drive INVOICE_FOLDER_ID
+ *      (file PDF dibagikan "siapa saja yang punya link: lihat" agar link bisa dikirim ke customer)
+ *   2) dicatat ke spreadsheet SPREADSHEET_ID, tab "Invoice":
+ *      A NoOrder | B Link (download PDF) | C Nama (Brand) | D… detail order lengkap
  *
  * Harga diambil dari file JSON privat "MaklonGo - harga (RAHASIA).json" di My Drive Anda.
  * File ini dibuat/diperbarui otomatis saat admin menekan "Sinkron harga ke Google Drive" di dashboard.
@@ -12,9 +14,16 @@
  * Script property wajib: ADMIN_KEY (kata sandi untuk baca order & sinkron harga).
  */
 const INVOICE_FOLDER_ID = "1mK3rR89YHAMnei2FQLDq9PjgLevZc57l";
+const SPREADSHEET_ID = "1JBD1A-D4J-HnfXA0z7VlePmOmP6ucgMAfExXRRURXv0";
+const INVOICE_TAB = "Invoice";
 const LOGO_URL = "https://maskit-store.github.io/maklonmoq50pcs/assets/img/logo-pdf.jpg";
 const APP_NAME = "MaklonGo";
 const TAGLINE = "Early Stage Brand Owner, Starts Here";
+
+// Kolom tab "Invoice". A–C mengikuti format yang sudah ada (NoOrder, Link, Nama).
+const INVOICE_HEADERS = ["NoOrder", "Link", "Nama", "Waktu Order", "Brand", "No HP", "Email", "Kota", "Jumlah SKU",
+  "Total pcs", "Total Invoice (Rp)", "Lihat PDF", "Rincian SKU", "Catatan Brand", "Status", "Packed", "JSON"];
+const COL = { id: 1, link: 2, packed: 16, json: 17, view: 12 };
 
 const DEFAULT_SETTINGS = {
   activeDosePct: 1, activeScrapFactor: 1.35, packagingMarkup: 1.35,
@@ -27,7 +36,7 @@ const DEFAULT_SETTINGS = {
     "MoU terlampir wajib ditandatangani kedua pihak di atas meterai Rp 10.000 dan dikirim kembali ke WhatsApp admin.",
 };
 
-/* ============================================================ HTTP */
+/* ============================================================ HTTP (web app) */
 function doPost(e) {
   let data;
   try { data = JSON.parse(e.postData.contents); } catch (err) { return json_({ error: "invalid json" }); }
@@ -49,21 +58,25 @@ function doPost(e) {
   const lock = LockService.getScriptLock();
   lock.waitLock(20000);
   try {
-    const sh = sheet_();
-    const ids = sh.getLastRow() > 1 ? sh.getRange(2, 2, sh.getLastRow() - 1, 1).getValues().flat() : [];
+    const sh = invoiceSheet_();
+    const last = sh.getLastRow();
+    const ids = last > 1 ? sh.getRange(2, COL.id, last - 1, 1).getValues().flat() : [];
     if (ids.indexOf(o.id) >= 0) return json_({ ok: true, duplicate: true });
-    let pdfUrl = "", total = "";
+    let download = "", view = "", total = "";
     try {
       const res = createInvoicePdf_(o);
-      pdfUrl = res.url; total = res.total;
+      download = res.download; view = res.view; total = res.total;
     } catch (err) {
-      pdfUrl = "GAGAL: " + err.message;
+      download = "GAGAL: " + err.message;
     }
+    const c = o.customer;
     const pcs = o.items.reduce((s, x) => s + Number(x.qty || 0), 0);
-    const ringkas = o.items.map((x, i) => `SKU${i + 1}: ${x.productName || x.baseName} ${x.vol}${x.unit || ""} x${x.qty}`).join(" | ");
-    sh.appendRow([new Date(o.createdAt), o.id, o.customer.name, "'" + o.customer.phone, o.customer.email, o.customer.city,
-      o.customer.brand, o.items.length, pcs, total, pdfUrl, ringkas, data.packed || "", JSON.stringify(o)]);
-    return json_({ ok: true, pdf: pdfUrl });
+    const rincian = o.items.map((x, i) => `SKU${i + 1}: ${x.productName || x.baseName} (${x.baseName}${x.variant ? ", " + x.variant : ""}) ${x.vol}${x.unit || ""} x${x.qty} pcs` +
+      ` | aktif: ${(x.activeNames || []).join(", ") || "-"}${x.customActives ? " + request: " + x.customActives : ""}` +
+      ` | kemasan: ${x.packagingLabel || "-"} | sample: ${x.sample ? "Ya" : "Tidak"}`).join("\n");
+    sh.appendRow([o.id, download, `${c.name} (${c.brand})`, new Date(o.createdAt), c.brand, "'" + c.phone, c.email, c.city,
+      o.items.length, pcs, total, view, rincian, c.brandNote || "", "Baru", data.packed || "", JSON.stringify(o)]);
+    return json_({ ok: true, pdf: download });
   } finally {
     lock.releaseLock();
   }
@@ -71,11 +84,12 @@ function doPost(e) {
 
 function doGet(e) {
   if (!checkKey_(e.parameter.key)) return json_({ error: "unauthorized" });
-  const sh = sheet_();
+  const sh = invoiceSheet_();
   const n = sh.getLastRow() - 1;
   if (n < 1) return json_({ orders: [] });
-  const rows = sh.getRange(2, 1, n, 14).getValues();
-  return json_({ orders: rows.map((r) => ({ packed: r[12] || null, order: r[13] ? JSON.parse(r[13]) : null, pdf: r[10] })) });
+  const rows = sh.getRange(2, 1, n, INVOICE_HEADERS.length).getValues();
+  return json_({ orders: rows.filter((r) => r[COL.json - 1]).map((r) => ({
+    packed: r[COL.packed - 1] || null, order: JSON.parse(r[COL.json - 1]), pdf: r[COL.view - 1] || r[COL.link - 1] })) });
 }
 
 function checkKey_(k) {
@@ -87,23 +101,31 @@ function json_(obj) {
   return ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(ContentService.MimeType.JSON);
 }
 
-function sheet_() {
-  const props = PropertiesService.getScriptProperties();
-  let id = props.getProperty("SHEET_ID");
-  let ss;
-  if (id) { try { ss = SpreadsheetApp.openById(id); } catch (e) { ss = null; } }
-  if (!ss) {
-    ss = SpreadsheetApp.create("MaklonGo Orders");
-    props.setProperty("SHEET_ID", ss.getId());
-    try { DriveApp.getFileById(ss.getId()).moveTo(DriveApp.getFolderById(INVOICE_FOLDER_ID).getParents().next()); } catch (e) {}
-  }
-  let sh = ss.getSheetByName("Orders");
-  if (!sh) {
-    sh = ss.getSheets()[0].setName("Orders");
-    sh.appendRow(["Waktu", "No Order", "Nama", "HP", "Email", "Kota", "Brand", "Jumlah SKU", "Total pcs", "Total invoice", "Invoice PDF", "Ringkasan", "Packed", "JSON"]);
+/* Tab "Invoice": pastikan header lengkap & hapus baris contoh (link GANTI_FILE_ID) */
+function invoiceSheet_() {
+  const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  let sh = ss.getSheetByName(INVOICE_TAB);
+  if (!sh) sh = ss.insertSheet(INVOICE_TAB);
+  const head = sh.getRange(1, 1, 1, INVOICE_HEADERS.length).getValues()[0];
+  if (head.join("|") !== INVOICE_HEADERS.join("|")) {
+    sh.getRange(1, 1, 1, INVOICE_HEADERS.length).setValues([INVOICE_HEADERS]).setFontWeight("bold");
     sh.setFrozenRows(1);
   }
+  const last = sh.getLastRow();
+  if (last > 1) {
+    const links = sh.getRange(2, COL.link, last - 1, 1).getValues().flat();
+    for (let i = links.length - 1; i >= 0; i--) {
+      if (String(links[i]).indexOf("GANTI_FILE_ID") >= 0) sh.deleteRow(i + 2);
+    }
+  }
   return sh;
+}
+
+/* Jalankan sekali dari editor (pilih "setup" → Run): memberi izin, merapikan tab Invoice & menghapus baris contoh. */
+function setup() {
+  invoiceSheet_();
+  DriveApp.getFolderById(INVOICE_FOLDER_ID).getName();
+  Logger.log("OK — tab Invoice siap.");
 }
 
 /* ============================================================ harga (sama dengan assets/js/pricing.js) */
@@ -157,7 +179,9 @@ function createInvoicePdf_(o) {
   const name = `INV-${o.id} - ${o.customer.brand || o.customer.name}.pdf`;
   const pdf = Utilities.newBlob(html, MimeType.HTML, "invoice.html").getAs(MimeType.PDF).setName(name);
   const file = DriveApp.getFolderById(INVOICE_FOLDER_ID).createFile(pdf);
-  return { url: file.getUrl(), total: calc.total };
+  // Hanya file ini yang bisa dibuka lewat link (folder tetap privat)
+  try { file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW); } catch (e) {}
+  return { download: "https://drive.google.com/uc?export=download&id=" + file.getId(), view: file.getUrl(), total: calc.total };
 }
 
 function esc_(s) {
@@ -311,5 +335,5 @@ function testInvoice() {
     items: [{ baseId, baseName: "Contoh Base", vol: prices.bases[baseId].vol, unit: prices.bases[baseId].unit, qty: 50, actives: [], activeNames: [],
       packagingId: packId, packagingLabel: packId, sticker: true, bpom: true, halal: true, sample: true }],
   });
-  Logger.log(res.url);
+  Logger.log(res.view);
 }
