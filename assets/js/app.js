@@ -334,7 +334,7 @@
       }
       case "size": return { ok: d.vol > 0 && Number(d.qty) >= MOQ, label: "Lanjut", sum: `<b>${esc(b.name)}</b>${d.vol ? d.vol + " " + b.unit : "Pilih volume"} · ${d.qty} pcs` };
       case "actives": return { ok: true, label: d.actives.length ? "Lanjut" : "Lewati", sum: `<b>${d.actives.length} bahan aktif dipilih</b>${esc(b.name)} ${d.vol} ${b.unit}` };
-      case "pack": return { ok: d.noPackaging || !!d.packagingId, label: "Lanjut", sum: d.noPackaging ? "<b>Admin bantu carikan</b>Kemasan" : d.packagingId ? `<b>${esc(IDX.packaging[d.packagingId].code)}</b>${esc(IDX.packaging[d.packagingId].name)}` : "Pilih 1 kemasan" };
+      case "pack": return { ok: d.noPackaging || (!!d.packagingId && packVolOk(d)), label: "Lanjut", sum: d.noPackaging ? "<b>Admin bantu carikan</b>Kemasan" : d.packagingId ? `<b>${esc(IDX.packaging[d.packagingId].code)}</b>${esc(IDX.packaging[d.packagingId].name)}` : "Pilih 1 kemasan" };
       case "legal": {
         const okL = d.sticker && d.bpom && d.halal, okN = (d.productName || "").trim().length >= 2;
         return { ok: okL && okN, label: "Lanjut", sum: !okL ? "<b>Centang semua</b>Wajib untuk setiap SKU" : !okN ? "<b>Isi nama produk</b>Wajib diisi" : "<b>Legalitas lengkap</b>Lanjut ke sample" };
@@ -403,7 +403,51 @@
     go(STEPS[i - 1]);
   }
 
+  // Volume kemasan wajib sama dengan volume produk
+  function packVolOk(d) {
+    if (d.noPackaging || !d.packagingId) return true;
+    const p = IDX.packaging[d.packagingId];
+    return !!p && p.vol === d.vol;
+  }
+
+  // Dialog konfirmasi sederhana (Promise<boolean>)
+  function askConfirm(title, body, yes, no) {
+    return new Promise((resolve) => {
+      const wrap = document.createElement("div");
+      wrap.className = "modal-bg";
+      wrap.innerHTML = `<div class="modal" role="dialog" aria-modal="true" style="max-width:440px">
+        <h3 style="margin:0 0 8px">${title}</h3><p style="margin:0 0 16px" class="muted">${body}</p>
+        <div class="row" style="justify-content:flex-end"><button class="btn btn-ghost" data-no>${no}</button><button class="btn btn-primary" data-yes>${yes}</button></div></div>`;
+      const done = (v) => { wrap.remove(); resolve(v); };
+      wrap.addEventListener("click", (e) => { if (e.target.closest("[data-yes]")) done(true); else if (e.target.closest("[data-no]") || e.target === wrap) done(false); });
+      document.body.appendChild(wrap);
+      wrap.querySelector("[data-yes]").focus();
+    });
+  }
+
+  async function choosePack(id) {
+    const d = S.draft, p = IDX.packaging[id];
+    if (!p) return;
+    const y = scrollY;
+    if (!p.vol) {
+      toast("Tutup / pump bukan kemasan utama. Pilih botol/pot, lalu tulis tutup yang diinginkan di catatan kemasan.", 4500);
+      return;
+    }
+    if (p.vol !== d.vol) {
+      const vLabel = `${p.volLabel || p.vol} ${p.unit || unit()}`;
+      const ok = await askConfirm("Volume kemasan berbeda",
+        `Volume produk yang kamu pilih <b>${d.vol} ${unit()}</b>, sedangkan kemasan <b>${esc(p.code)}</b> bervolume <b>${vLabel}</b>.<br><br>Ubah volume produk menjadi <b>${vLabel}</b> sesuai kemasan ini?`,
+        `Ya, ubah ke ${vLabel}`, "Tidak");
+      if (!ok) { toast(`Kemasan tidak dipilih. Pilih kemasan bervolume ${d.vol} ${unit()}, atau ubah volume produk.`, 4000); return; }
+      d.vol = p.vol;
+      ui.packFilter = "match";
+      toast(`Volume produk diubah menjadi ${vLabel}`);
+    }
+    d.packagingId = id; d.noPackaging = false; persist(); render(); scrollTo(0, y);
+  }
+
   function saveSku() {
+    if (!packVolOk(S.draft)) { toast("Volume produk dan volume kemasan harus sama."); return go("pack"); }
     const d = { ...S.draft };
     const idx = d.editIndex;
     delete d.editIndex;
@@ -509,7 +553,7 @@
     if (ds.active) { const i = d.actives.indexOf(ds.active); i >= 0 ? d.actives.splice(i, 1) : d.actives.push(ds.active); persist(); return render(); }
     if (ds.packfilter) { if (t.disabled) return; ui.packFilter = ds.packfilter; ui.packType = "all"; ui.packLimit = PAGE; return render(); }
     if (ds.packtype) { ui.packType = ds.packtype; ui.packLimit = PAGE; return render(); }
-    if (ds.pack) { d.packagingId = ds.pack; d.noPackaging = false; persist(); const y = scrollY; render(); scrollTo(0, y); return; }
+    if (ds.pack) { choosePack(ds.pack); return; }
     if (ds.nopack !== undefined) { d.noPackaging = !d.noPackaging; if (d.noPackaging) d.packagingId = null; persist(); const y = scrollY; render(); scrollTo(0, y); return; }
     if (ds.more !== undefined) { ui.packLimit += PAGE * 2; const y = scrollY; render(); scrollTo(0, y); return; }
     if (ds.edit) { S.draft = { ...emptyDraft(), ...S.cart[+ds.edit], editIndex: +ds.edit }; return go("base"); }
