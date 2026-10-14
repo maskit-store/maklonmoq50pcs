@@ -21,5 +21,5 @@ window.MG_CONFIG = {
 
   // (Opsional) URL Web App Google Apps Script untuk menyimpan order otomatis ke Google Sheet.
   // Lihat apps-script/README.md. Kosongkan jika tidak dipakai.
-  orderEndpoint: "",
+  orderEndpoint: "https://script.google.com/macros/s/AKfycbx3y2tmxlZeRcnqfNVDys0v0ljZoTWNWuTGFZpSEUVDJCLKjP22g9p5ovFCCSS44FVT/exec",
 };
