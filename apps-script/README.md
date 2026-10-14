@@ -37,8 +37,8 @@ Harga tidak pernah dikirim ke browser customer: script membaca harga dari file p
    - Who has access: **Anyone**
    - **Deploy** → salin **Web app URL** (`https://script.google.com/macros/s/…/exec`).
 6. Kirim **Web app URL** ke developer (atau isi sendiri di `assets/js/config.js` → `orderEndpoint`).
-7. Buka dashboard admin → **Pengaturan → Google Drive**: isi URL & `ADMIN_KEY` → **Simpan** →
-   **Sinkron harga ke Google Drive**. Ulangi klik "Sinkron harga" setiap kali harga / pengaturan invoice diubah.
+7. Buka dashboard admin → **Pengaturan → Google Drive**: isi URL & `ADMIN_KEY` → **Simpan**.
+   Setelah tersambung, semua perubahan harga, pengaturan & order **tersimpan otomatis** (tidak perlu klik sinkron lagi).
 8. (Opsional) Pilih fungsi `testInvoice` → **Run** untuk membuat PDF contoh di folder invoice.
 
 **Tips:** buat `ADMIN_KEY` sama dengan password dashboard admin. Dengan begitu dashboard di perangkat mana pun
