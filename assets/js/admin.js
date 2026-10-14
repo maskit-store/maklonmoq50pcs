@@ -350,7 +350,7 @@
       <div class="card" style="margin-bottom:12px">
         <dl class="kv" style="margin:0">
           <dt>Nama</dt><dd>${esc(c.name)}</dd>
-          <dt>HP / WA</dt><dd><a href="https://wa.me/${window.MG.normalizePhone(c.phone)}" target="_blank" rel="noopener">${esc(c.phone)}</a></dd>
+          <dt>HP / WA</dt><dd><a href="${esc(window.MG.waLink(c.phone, ""))}" target="_blank" rel="noopener">${esc(c.phone)}</a></dd>
           <dt>Email</dt><dd><a href="mailto:${esc(c.email)}">${esc(c.email)}</a></dd>
           <dt>Kota</dt><dd>${esc(c.city)}</dd>
           <dt>Brand</dt><dd>${esc(c.brand)}</dd>

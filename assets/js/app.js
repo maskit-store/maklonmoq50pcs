@@ -315,9 +315,12 @@
       <div class="order-no">${esc(o.id)}</div>
       <p class="muted" style="max-width:440px;margin:10px auto 20px">WhatsApp akan terbuka dengan pesan pesanan. <b>Tekan kirim</b> di WhatsApp agar admin menerima order kamu. Invoice akan dikirim admin setelah dicek.</p>
       <div class="row" style="justify-content:center">
-        <a class="btn btn-wa" href="${o.wa}" target="_blank" rel="noopener">Buka WhatsApp lagi</a>
+        <a class="btn btn-wa" href="${o.wa}" target="_blank" rel="noopener">Buka WhatsApp</a>
+        ${o.msg ? '<button class="btn btn-ghost" data-copymsg>Salin pesan order</button>' : ""}
         <button class="btn btn-ghost" data-restart>Buat order baru</button>
       </div>
+      <p class="small muted" style="max-width:440px;margin:18px auto 0">WhatsApp tidak terbuka? Tekan <b>Salin pesan order</b>, lalu kirim (tempel) ke WhatsApp admin
+        <a href="${esc(window.MG.waLink(CFG.adminWhatsApp, ""))}" target="_blank" rel="noopener">+${esc(window.MG.normalizePhone(CFG.adminWhatsApp))}</a>.</p>
     </section>`;
   }
 
@@ -443,7 +446,8 @@
       customer: { name: c.name.trim(), phone: c.phone.trim(), email: c.email.trim(), city: c.city.trim(), brand: c.brand.trim(), brandNote: (c.brandNote || "").trim(), notes: (c.notes || "").trim() },
       items: S.cart.map((x) => ({ ...x })),
     };
-    const msg = window.MG.orderMessage(order);
+    // Link admin hanya perlu jika order tidak otomatis tercatat ke Google Sheet
+    const msg = window.MG.orderMessage(order, !CFG.orderEndpoint);
     const wa = window.MG.waLink(CFG.adminWhatsApp, msg);
     // Simpan otomatis ke Google Sheet (opsional)
     if (CFG.orderEndpoint) {
@@ -456,7 +460,7 @@
     const history = store.get("mg_history", []);
     history.unshift({ id: order.id, createdAt: order.createdAt, skus: order.items.length });
     store.set("mg_history", history.slice(0, 20));
-    S.lastOrder = { id: order.id, wa };
+    S.lastOrder = { id: order.id, wa, msg };
     S.cart = [];
     S.draft = emptyDraft();
     go("success");
@@ -469,10 +473,16 @@
   btnBack.addEventListener("click", back);
 
   document.addEventListener("click", (e) => {
-    const t = e.target.closest("[data-go],[data-sample],[data-basecat],[data-base],[data-variant],[data-vol],[data-qty],[data-qtyset],[data-actcat],[data-active],[data-packfilter],[data-packtype],[data-pack],[data-nopack],[data-more],[data-edit],[data-dup],[data-del],[data-newsku],[data-restart]");
+    const t = e.target.closest("[data-go],[data-copymsg],[data-sample],[data-basecat],[data-base],[data-variant],[data-vol],[data-qty],[data-qtyset],[data-actcat],[data-active],[data-packfilter],[data-packtype],[data-pack],[data-nopack],[data-more],[data-edit],[data-dup],[data-del],[data-newsku],[data-restart]");
     if (!t) return;
     const d = S.draft, ds = t.dataset;
     if (ds.go) { e.preventDefault(); if (ds.go === "base" && S.view === "home") { if (d.editIndex == null && !d.baseId) S.draft = emptyDraft(); } return go(ds.go); }
+    if (ds.copymsg !== undefined) {
+      const msg = (S.lastOrder || {}).msg || "";
+      (navigator.clipboard ? navigator.clipboard.writeText(msg) : Promise.reject()).then(() => toast("Pesan order disalin — tempel di WhatsApp admin"))
+        .catch(() => { const ta = document.createElement("textarea"); ta.value = msg; document.body.appendChild(ta); ta.select(); document.execCommand("copy"); ta.remove(); toast("Pesan order disalin"); });
+      return;
+    }
     if (ds.sample !== undefined) { d.sample = ds.sample === "1"; persist(); return render(); }
     if (ds.basecat) { ui.baseCat = ds.basecat; return render(); }
     if (ds.base) {

@@ -112,7 +112,7 @@
       if (it.customActives) L.push(`• Request bahan aktif lain: ${it.customActives}`);
       L.push(`• Kemasan: ${packagingLabel(it)}`);
       if (it.packagingNote) L.push(`  Catatan kemasan: ${it.packagingNote}`);
-      L.push(`• Sticker ${it.sticker ? "✅" : "❌"} | BPOM & Lab ${it.bpom ? "✅" : "❌"} | Halal ${it.halal ? "✅" : "❌"}`);
+      L.push(`• Sticker: ${it.sticker ? "Ya" : "Tidak"} | BPOM & Lab: ${it.bpom ? "Ya" : "Tidak"} | Halal: ${it.halal ? "Ya" : "Tidak"}`);
       L.push(`• Request sample: ${it.sample ? "Ya" : "Tidak"}`);
     });
     L.push("");
@@ -137,8 +137,15 @@
     }) };
   }
 
+  const isMobile = () => /Android|iPhone|iPad|iPod|Mobile|Opera Mini|IEMobile/i.test(navigator.userAgent || "");
+
+  // HP → api.whatsapp.com (membuka aplikasi WhatsApp). Komputer → langsung WhatsApp Web.
+  // Sengaja tidak memakai wa.me: domain itu sering timeout di beberapa jaringan/ISP.
   function waLink(number, text) {
-    return `https://wa.me/${normalizePhone(number)}?text=${encodeURIComponent(text)}`;
+    const phone = normalizePhone(number);
+    return isMobile()
+      ? `https://api.whatsapp.com/send?phone=${phone}&text=${encodeURIComponent(text)}`
+      : `https://web.whatsapp.com/send?phone=${phone}&text=${encodeURIComponent(text)}`;
   }
 
   function toast(msg, ms = 2600) {
@@ -155,6 +162,6 @@
     del(k) { try { localStorage.removeItem(k); } catch {} },
   };
 
-  window.MG = { C, CFG, IDX, esc, rupiah, fmtDate, normalizePhone, newOrderId, baseActives, packagingLabel,
+  window.MG = { isMobile, C, CFG, IDX, esc, rupiah, fmtDate, normalizePhone, newOrderId, baseActives, packagingLabel,
     packOrder, unpackOrder, enrichOrder, orderMessage, waLink, toast, store };
 })();
