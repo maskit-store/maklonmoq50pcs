@@ -1,52 +1,315 @@
 /**
- * MaklonGo — penyimpan order ke Google Sheet (opsional).
- * Deploy sebagai Web App: Execute as "Me", Who has access "Anyone".
- * Set Script Property ADMIN_KEY (Project Settings → Script properties).
+ * MaklonGo — backend Google Apps Script (standalone project di script.google.com)
+ *
+ * Setiap order dari web customer:
+ *   1) dicatat ke Google Sheet "MaklonGo Orders" (dibuat otomatis)
+ *   2) dibuatkan invoice + MoU dalam bentuk PDF → disimpan ke folder Drive INVOICE_FOLDER_ID
+ *
+ * Harga diambil dari file JSON privat "MaklonGo - harga (RAHASIA).json" di My Drive Anda.
+ * File ini dibuat/diperbarui otomatis saat admin menekan "Sinkron harga ke Google Drive" di dashboard.
+ *
+ * Deploy: Deploy → New deployment → Web app → Execute as: Me, Who has access: Anyone.
+ * Script property wajib: ADMIN_KEY (kata sandi untuk baca order & sinkron harga).
  */
-const SHEET_NAME = "Orders";
+const INVOICE_FOLDER_ID = "1mK3rR89YHAMnei2FQLDq9PjgLevZc57l";
+const LOGO_URL = "https://maskit-store.github.io/maklonmoq50pcs/assets/img/logo-pdf.jpg";
+const APP_NAME = "MaklonGo";
+const TAGLINE = "Early Stage Brand Owner, Starts Here";
 
-function sheet_() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  let sh = ss.getSheetByName(SHEET_NAME);
-  if (!sh) {
-    sh = ss.insertSheet(SHEET_NAME);
-    sh.appendRow(["Waktu", "No Order", "Nama", "HP", "Email", "Kota", "Brand", "Jumlah SKU", "Total pcs", "Ringkasan", "Packed", "JSON"]);
-    sh.setFrozenRows(1);
-  }
-  return sh;
-}
+const DEFAULT_SETTINGS = {
+  activeDosePct: 1, activeScrapFactor: 1.35, packagingMarkup: 1.35,
+  bpomLabPerSku: 3500000, halalPerSku: 3500000, samplePerSku: 555000, stickerPerPcs: 0,
+  roundPerPcs: 1, dpPercent: 50, invoiceDueDays: 7,
+  companyName: APP_NAME, companyAddress: "", companyPhone: "", companyEmail: "",
+  bankInfo: "", signerName: "", signerTitle: "Direktur", courtCity: "",
+  invoiceNotes: "Harga belum termasuk ongkos kirim. Ongkos kirim dibayarkan saat produk sudah ready.\n" +
+    "Pembayaran: DP 50% untuk memulai proses. Pelunasan sisa 50% + ongkos kirim dilakukan setelah nomor izin edar BPOM terbit.\n" +
+    "MoU terlampir wajib ditandatangani kedua pihak di atas meterai Rp 10.000 dan dikirim kembali ke WhatsApp admin.",
+};
 
+/* ============================================================ HTTP */
 function doPost(e) {
+  let data;
+  try { data = JSON.parse(e.postData.contents); } catch (err) { return json_({ error: "invalid json" }); }
+
+  if (data.action === "syncPrices") {
+    if (!checkKey_(data.key)) return json_({ error: "unauthorized" });
+    const props = PropertiesService.getScriptProperties();
+    const content = JSON.stringify(data.prices);
+    let file = null;
+    const id = props.getProperty("PRICES_FILE_ID");
+    if (id) { try { file = DriveApp.getFileById(id); } catch (err) { file = null; } }
+    if (file) file.setContent(content);
+    else { file = DriveApp.createFile("MaklonGo - harga (RAHASIA).json", content, MimeType.PLAIN_TEXT); props.setProperty("PRICES_FILE_ID", file.getId()); }
+    return json_({ ok: true, synced: new Date().toISOString() });
+  }
+
+  const o = data.order;
+  if (!o || !o.id || !o.items || !o.customer) return json_({ error: "invalid order" });
   const lock = LockService.getScriptLock();
-  lock.waitLock(10000);
+  lock.waitLock(20000);
   try {
-    const data = JSON.parse(e.postData.contents);
-    const o = data.order;
-    if (!o || !o.id) return json_({ error: "invalid" });
     const sh = sheet_();
-    const ids = sh.getRange(2, 2, Math.max(sh.getLastRow() - 1, 1), 1).getValues().flat();
+    const ids = sh.getLastRow() > 1 ? sh.getRange(2, 2, sh.getLastRow() - 1, 1).getValues().flat() : [];
     if (ids.indexOf(o.id) >= 0) return json_({ ok: true, duplicate: true });
+    let pdfUrl = "", total = "";
+    try {
+      const res = createInvoicePdf_(o);
+      pdfUrl = res.url; total = res.total;
+    } catch (err) {
+      pdfUrl = "GAGAL: " + err.message;
+    }
     const pcs = o.items.reduce((s, x) => s + Number(x.qty || 0), 0);
-    const ringkas = o.items.map((x, i) => `SKU${i + 1}: ${x.baseName || x.baseId} ${x.vol}${x.unit || ""} x${x.qty}`).join(" | ");
+    const ringkas = o.items.map((x, i) => `SKU${i + 1}: ${x.productName || x.baseName} ${x.vol}${x.unit || ""} x${x.qty}`).join(" | ");
     sh.appendRow([new Date(o.createdAt), o.id, o.customer.name, "'" + o.customer.phone, o.customer.email, o.customer.city,
-      o.customer.brand, o.items.length, pcs, ringkas, data.packed || "", JSON.stringify(o)]);
-    return json_({ ok: true });
+      o.customer.brand, o.items.length, pcs, total, pdfUrl, ringkas, data.packed || "", JSON.stringify(o)]);
+    return json_({ ok: true, pdf: pdfUrl });
   } finally {
     lock.releaseLock();
   }
 }
 
 function doGet(e) {
-  const key = PropertiesService.getScriptProperties().getProperty("ADMIN_KEY");
-  if (!key || (e.parameter.key || "") !== key) return json_({ error: "unauthorized" });
+  if (!checkKey_(e.parameter.key)) return json_({ error: "unauthorized" });
   const sh = sheet_();
   const n = sh.getLastRow() - 1;
   if (n < 1) return json_({ orders: [] });
-  const rows = sh.getRange(2, 1, n, 12).getValues();
-  const orders = rows.map((r) => ({ packed: r[10] || null, order: r[11] ? JSON.parse(r[11]) : null }));
-  return json_({ orders });
+  const rows = sh.getRange(2, 1, n, 14).getValues();
+  return json_({ orders: rows.map((r) => ({ packed: r[12] || null, order: r[13] ? JSON.parse(r[13]) : null, pdf: r[10] })) });
+}
+
+function checkKey_(k) {
+  const key = PropertiesService.getScriptProperties().getProperty("ADMIN_KEY");
+  return !!key && k === key;
 }
 
 function json_(obj) {
   return ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(ContentService.MimeType.JSON);
+}
+
+function sheet_() {
+  const props = PropertiesService.getScriptProperties();
+  let id = props.getProperty("SHEET_ID");
+  let ss;
+  if (id) { try { ss = SpreadsheetApp.openById(id); } catch (e) { ss = null; } }
+  if (!ss) {
+    ss = SpreadsheetApp.create("MaklonGo Orders");
+    props.setProperty("SHEET_ID", ss.getId());
+    try { DriveApp.getFileById(ss.getId()).moveTo(DriveApp.getFolderById(INVOICE_FOLDER_ID).getParents().next()); } catch (e) {}
+  }
+  let sh = ss.getSheetByName("Orders");
+  if (!sh) {
+    sh = ss.getSheets()[0].setName("Orders");
+    sh.appendRow(["Waktu", "No Order", "Nama", "HP", "Email", "Kota", "Brand", "Jumlah SKU", "Total pcs", "Total invoice", "Invoice PDF", "Ringkasan", "Packed", "JSON"]);
+    sh.setFrozenRows(1);
+  }
+  return sh;
+}
+
+/* ============================================================ harga (sama dengan assets/js/pricing.js) */
+function loadPrices_() {
+  const id = PropertiesService.getScriptProperties().getProperty("PRICES_FILE_ID");
+  if (!id) throw new Error("Harga belum disinkron. Buka dashboard admin → Pengaturan → Sinkron harga ke Google Drive.");
+  const p = JSON.parse(DriveApp.getFileById(id).getBlob().getDataAsString());
+  p.settings = Object.assign({}, DEFAULT_SETTINGS, p.settings || {});
+  return p;
+}
+const num_ = (v, d) => (v === "" || v == null || isNaN(Number(v)) ? (d || 0) : Number(v));
+
+function computeSku_(item, prices) {
+  const st = prices.settings;
+  const qty = num_(item.qty);
+  const vol = num_(item.vol);
+  const lines = [];
+  const bp = prices.bases[item.baseId];
+  lines.push({ label: "Base", value: bp ? (bp.price / bp.vol) * vol : 0 });
+  const doseG = vol * (num_(st.activeDosePct, 1) / 100);
+  (item.actives || []).forEach((id, i) => {
+    const ap = prices.actives[id];
+    lines.push({ label: (item.activeNames || [])[i] || id, value: ap ? ap.pricePerGram * doseG * num_(st.activeScrapFactor, 1.35) : 0 });
+  });
+  const pp = item.noPackaging ? null : prices.packaging[item.packagingId];
+  lines.push({ label: "Kemasan", value: pp && pp.price ? pp.price : 0 });
+  if (item.sticker) lines.push({ label: "Sticker", value: num_(st.stickerPerPcs) });
+  const round = Math.max(1, num_(st.roundPerPcs, 1));
+  const rawUnit = lines.reduce((s, l) => s + num_(l.value), 0);
+  const unit = round > 1 ? Math.ceil(rawUnit / round) * round : Math.round(rawUnit);
+  const bpom = item.bpom ? num_(st.bpomLabPerSku) : 0;
+  const halal = item.halal ? num_(st.halalPerSku) : 0;
+  const sample = item.sample ? num_(st.samplePerSku, 555000) : 0;
+  return { lines, qty, unit, production: unit * qty, bpom, halal, sample, total: unit * qty + bpom + halal + sample,
+    needsReview: !bp || (!item.noPackaging && !(pp && pp.price)) || !!item.noPackaging || !!item.customActives };
+}
+
+function computeOrder_(order, prices) {
+  const skus = order.items.map((it) => computeSku_(it, prices));
+  const total = skus.reduce((s, x) => s + x.total, 0);
+  const dpPct = num_(prices.settings.dpPercent, 0);
+  const dp = Math.round((total * dpPct) / 100);
+  return { skus, subtotal: total, total, dp, dpPct, balance: total - dp };
+}
+
+/* ============================================================ PDF */
+function createInvoicePdf_(o) {
+  const prices = loadPrices_();
+  const calc = computeOrder_(o, prices);
+  const html = invoiceHtml_(o, calc, prices.settings);
+  const name = `INV-${o.id} - ${o.customer.brand || o.customer.name}.pdf`;
+  const pdf = Utilities.newBlob(html, MimeType.HTML, "invoice.html").getAs(MimeType.PDF).setName(name);
+  const file = DriveApp.getFolderById(INVOICE_FOLDER_ID).createFile(pdf);
+  return { url: file.getUrl(), total: calc.total };
+}
+
+function esc_(s) {
+  return String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+}
+function rp_(n) {
+  return "Rp " + Math.round(n).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+}
+function tgl_(d, withDay) {
+  const bulan = ["Januari", "Februari", "Maret", "April", "Mei", "Juni", "Juli", "Agustus", "September", "Oktober", "November", "Desember"];
+  const hari = ["Minggu", "Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu"];
+  return (withDay ? hari[d.getDay()] + ", " : "") + d.getDate() + " " + bulan[d.getMonth()] + " " + d.getFullYear();
+}
+function logoDataUri_() {
+  try {
+    const bytes = UrlFetchApp.fetch(LOGO_URL).getBlob().getBytes();
+    return bytes && bytes.length ? "data:image/jpeg;base64," + Utilities.base64Encode(bytes) : "";
+  } catch (e) { return ""; }
+}
+
+function invoiceHtml_(o, calc, st) {
+  const c = o.customer;
+  const logo = logoDataUri_();
+  const now = new Date();
+  const due = new Date(now.getTime() + (Number(st.invoiceDueDays) || 7) * 864e5);
+  const company = st.companyName || APP_NAME;
+  const adminWa = st.companyPhone || "";
+  let no = 0;
+  const rows = [];
+  o.items.forEach((it, i) => {
+    const s = calc.skus[i];
+    const desc = [
+      `<b>SKU ${i + 1} — ${esc_(it.productName || it.baseName)} (${esc_(it.vol)} ${esc_(it.unit || "ml")})</b>`,
+      `Base: ${esc_(it.baseName)}${it.variant ? " (" + esc_(it.variant) + ")" : ""}`,
+      `Bahan aktif tambahan: ${esc_((it.activeNames || []).join(", ") || "-")}${it.customActives ? "; request: " + esc_(it.customActives) : ""}`,
+      `Kemasan: ${esc_(it.packagingLabel || "-")}`,
+      it.sticker ? "Termasuk sticker label" : "",
+    ].filter(Boolean).join("<br>");
+    rows.push([++no, desc, s.qty + " pcs", rp_(s.unit), rp_(s.production)]);
+    if (it.bpom) rows.push([++no, `Biaya BPOM &amp; Lab — SKU ${i + 1}`, "1 SKU", rp_(s.bpom), rp_(s.bpom)]);
+    if (it.halal) rows.push([++no, `Sertifikasi Halal — SKU ${i + 1}`, "1 SKU", rp_(s.halal), rp_(s.halal)]);
+    if (it.sample) rows.push([++no, `Sample produk (termasuk PPN) — SKU ${i + 1}`, "1 SKU", rp_(s.sample), rp_(s.sample)]);
+  });
+  const review = calc.skus.some((s) => s.needsReview);
+  const tot = [["Subtotal", rp_(calc.subtotal)], ["<b style='color:#0a8a86;font-size:12pt'>TOTAL</b>", `<b style='color:#0a8a86;font-size:12pt'>${rp_(calc.total)}</b>`],
+    ["Ongkos kirim", "ditagih saat produk ready"]];
+  if (calc.dpPct) { tot.push([`DP ${calc.dpPct}% (di awal)`, rp_(calc.dp)]); tot.push(["Pelunasan setelah NIE BPOM terbit (+ ongkir)", rp_(calc.balance)]); }
+
+  const pasal = (n, title, items) => `<h4>Pasal ${n}<br>${title}</h4>` +
+    (items.length > 1 ? `<ol>${items.map((t) => `<li>${t}</li>`).join("")}</ol>` : `<p>${items[0]}</p>`);
+  const skuList = o.items.map((it, i) => `SKU ${i + 1} "${esc_(it.productName || it.baseName)}" ${esc_(it.vol)} ${esc_(it.unit || "ml")} sebanyak ${calc.skus[i].qty} pcs`).join("; ");
+
+  return `<!doctype html><html><head><meta charset="utf-8"><style>
+    @page { size: A4; margin: 16mm 15mm; }
+    body { font-family: Arial, Helvetica, sans-serif; font-size: 9.5pt; color: #262626; }
+    .bar { height: 5px; background: #11bab5; margin-bottom: 14px; }
+    table { border-collapse: collapse; width: 100%; }
+    .head td { vertical-align: top; }
+    .muted { color: #666; }
+    h1 { color: #0a8a86; font-size: 22pt; margin: 0; text-align: right; }
+    .items th { background: #0a8a86; color: #fff; padding: 6px; font-size: 9pt; text-align: left; }
+    .items td { border-bottom: 1px solid #e8e4dc; padding: 6px; vertical-align: top; font-size: 8.8pt; }
+    .r { text-align: right; white-space: nowrap; } .c { text-align: center; }
+    .tot td { padding: 3px 6px; }
+    .note { background: #fff4d6; border: 1px solid #f3dc9a; padding: 8px 10px; color: #6b4c00; margin-top: 10px; }
+    .mou { page-break-before: always; font-size: 9.3pt; line-height: 1.45; }
+    .mou h2 { text-align: center; margin: 0; font-size: 13pt; } .mou h3 { text-align: center; margin: 2px 0; font-size: 11pt; }
+    .mou h4 { text-align: center; margin: 12px 0 4px; font-size: 10pt; }
+    .mou ol { margin: 0; padding-left: 20px; } .mou p { margin: 4px 0; text-align: justify; } .mou li { text-align: justify; margin-bottom: 2px; }
+    .sig td { width: 50%; text-align: center; vertical-align: top; padding-top: 18px; }
+    .meterai { width: 110px; height: 70px; border: 1px dashed #999; margin: 10px auto; color: #999; font-size: 8pt; padding-top: 22px; box-sizing: border-box; }
+    .line { border-top: 1px solid #444; width: 75%; margin: 30px auto 4px; }
+  </style></head><body>
+  <div class="bar"></div>
+  <table class="head"><tr>
+    <td>${logo ? `<img src="${logo}" style="height:46px">` : `<b style="font-size:20pt">${APP_NAME}</b>`}<br>
+      <span class="muted">${[company !== APP_NAME ? esc_(company) : "", esc_(st.companyAddress), adminWa ? "WA: " + esc_(adminWa) : "", esc_(st.companyEmail)].filter(Boolean).join("<br>") || TAGLINE}</span></td>
+    <td style="text-align:right"><h1>INVOICE</h1><span class="muted">No. Invoice: INV/${esc_(o.id)}<br>No. Order: ${esc_(o.id)}<br>Tanggal: ${tgl_(now)}<br>Jatuh tempo: ${tgl_(due)}</span></td>
+  </tr></table>
+  <hr style="border:0;border-top:1px solid #e5e5e5;margin:12px 0">
+  <b>Ditagihkan kepada:</b><br><span class="muted">${esc_(c.name)}<br>Brand: ${esc_(c.brand)}<br>${esc_(c.phone)} · ${esc_(c.email)}<br>${esc_(c.city)}</span>
+  <table class="items" style="margin-top:14px"><tr><th class="c" style="width:22px">No</th><th>Deskripsi</th><th class="r">Qty</th><th class="r">Harga</th><th class="r">Jumlah</th></tr>
+    ${rows.map((r) => `<tr><td class="c">${r[0]}</td><td>${r[1]}</td><td class="r">${r[2]}</td><td class="r">${r[3]}</td><td class="r">${r[4]}</td></tr>`).join("")}
+  </table>
+  <table class="tot" style="width:62%;margin:10px 0 0 auto">${tot.map((t) => `<tr><td>${t[0]}</td><td class="r">${t[1]}</td></tr>`).join("")}</table>
+  ${review ? `<div class="note">Sebagian komponen (kemasan dicarikan admin / request bahan aktif) akan dikonfirmasi admin. Invoice final dapat berubah setelah dicek admin.</div>` : ""}
+  ${st.bankInfo ? `<p><b>Informasi Pembayaran</b><br>${esc_(st.bankInfo).replace(/\n/g, "<br>")}</p>` : ""}
+  <p><b>Catatan</b><br>${esc_(st.invoiceNotes).replace(/\n/g, "<br>")}</p>
+
+  <div class="mou">
+    ${logo ? `<div style="text-align:center"><img src="${logo}" style="height:34px"></div>` : ""}
+    <h2>MEMORANDUM OF UNDERSTANDING (MoU)</h2><h3>PERJANJIAN KERJA SAMA MAKLON PRODUK KOSMETIK</h3>
+    <div style="text-align:center" class="muted">Nomor: MOU/${esc_(o.id)}</div>
+    <p>Pada hari ini, ${tgl_(now, true)}, yang bertanda tangan di bawah ini:</p>
+    <p>1. ${esc_(company)}${st.signerName ? `, dalam hal ini diwakili oleh ${esc_(st.signerName)} selaku ${esc_(st.signerTitle || "Direktur")}` : ""}${st.companyAddress ? `, beralamat di ${esc_(st.companyAddress)}` : ""}, selanjutnya disebut "PIHAK PERTAMA" atau "Pemaklon".</p>
+    <p>2. ${esc_(c.name)}, pemilik merek "${esc_(c.brand)}", berdomisili di ${esc_(c.city)}, No. HP ${esc_(c.phone)}, email ${esc_(c.email)}, selanjutnya disebut "PIHAK KEDUA" atau "Pemilik Merek".</p>
+    <p>PIHAK PERTAMA dan PIHAK KEDUA (selanjutnya bersama-sama disebut "PARA PIHAK") sepakat untuk mengikatkan diri dalam kerja sama maklon produk kosmetik dengan ketentuan sebagai berikut:</p>
+    ${pasal(1, "RUANG LINGKUP", [
+      `PIHAK PERTAMA memproduksi produk kosmetik untuk merek milik PIHAK KEDUA sesuai rincian pesanan No. ${esc_(o.id)} dan invoice No. INV/${esc_(o.id)} yang merupakan bagian tidak terpisahkan dari MoU ini, yaitu: ${skuList}.`,
+      "Pekerjaan meliputi produksi, pengisian ke dalam kemasan, pemasangan sticker/label, serta pengurusan notifikasi BPOM dan sertifikasi halal sesuai pilihan PIHAK KEDUA."])}
+    ${pasal(2, "HARGA DAN PEMBAYARAN", [
+      `Nilai pekerjaan sesuai invoice sebesar ${rp_(calc.total)} dan belum termasuk ongkos kirim. Ongkos kirim dibayarkan oleh PIHAK KEDUA pada saat produk sudah siap (ready).`,
+      `PIHAK KEDUA membayar uang muka (DP) sebesar ${calc.dpPct || 50}% (${rp_(calc.dp)}) sebelum proses pendaftaran, pengujian dan produksi dimulai.`,
+      "Pelunasan sisa pembayaran beserta ongkos kirim wajib dibayarkan oleh PIHAK KEDUA setelah nomor izin edar (notifikasi) BPOM terbit, sebelum produk dikirim.",
+      `Biaya request sample (apabila dipilih) sebesar ${rp_(st.samplePerSku || 555000)} per SKU sudah termasuk PPN dan dibayarkan bersama DP.`,
+      "Uang muka yang telah dibayarkan tidak dapat dikembalikan apabila PIHAK KEDUA membatalkan pesanan secara sepihak setelah proses pendaftaran, pengujian, pembelian bahan atau produksi dimulai."])}
+    ${pasal(3, "HAK DAN KEWAJIBAN PIHAK PERTAMA", [
+      "Memproduksi produk sesuai spesifikasi yang disepakati dengan memperhatikan Cara Pembuatan Kosmetika yang Baik (CPKB) dan standar mutu yang berlaku.",
+      "Mengurus pendaftaran notifikasi BPOM, pengujian laboratorium dan sertifikasi halal sesuai pilihan PIHAK KEDUA, dengan data yang benar dari PIHAK KEDUA.",
+      "Menginformasikan perkembangan proses kepada PIHAK KEDUA dan menjaga kerahasiaan data serta konsep merek PIHAK KEDUA.",
+      "Berhak menunda atau menghentikan proses apabila PIHAK KEDUA belum memenuhi kewajiban pembayaran atau melanggar ketentuan MoU ini."])}
+    ${pasal(4, "HAK DAN KEWAJIBAN PIHAK KEDUA", [
+      "Memberikan data, dokumen dan desain label yang benar dan lengkap, serta bertanggung jawab penuh atas keabsahan merek, logo dan desain (tidak melanggar hak kekayaan intelektual pihak lain).",
+      "Menyetujui desain sticker/label dan spesifikasi produk sebelum produksi dimulai; perubahan setelah persetujuan dapat menimbulkan biaya tambahan.",
+      "Melakukan pembayaran sesuai jadwal pada Pasal 2.",
+      "Memasarkan produk sesuai klaim, kegunaan dan informasi yang telah disetujui BPOM, serta mematuhi peraturan perundang-undangan yang berlaku."])}
+    ${pasal(5, "IZIN EDAR, FORMULA DAN MEREK", [
+      "Nomor izin edar (notifikasi BPOM) hanya berlaku untuk produk yang diproduksi oleh PIHAK PERTAMA dan tidak boleh digunakan untuk produk lain dalam bentuk apa pun.",
+      "Formula produk merupakan milik dan rahasia PIHAK PERTAMA. Merek dan desain kemasan merupakan milik PIHAK KEDUA.",
+      "Pemindahan atau penggunaan nomor izin edar oleh pihak lain hanya dapat dilakukan dengan persetujuan tertulis PIHAK PERTAMA dan sesuai ketentuan BPOM."])}
+    ${pasal(6, "LARANGAN DAN SANKSI", [
+      "PIHAK KEDUA dilarang: (a) menyalahgunakan nomor izin edar, termasuk mencantumkannya pada produk yang tidak diproduksi oleh PIHAK PERTAMA; (b) memalsukan produk, mengubah isi/komposisi, mengemas ulang (repacking) atau mencampur produk; (c) memalsukan label, dokumen, sertifikat BPOM maupun sertifikat halal; (d) melakukan tindakan pidana lainnya yang berkaitan dengan produk.",
+      `Apabila PIHAK KEDUA melakukan pelanggaran sebagaimana dimaksud pada ayat (1), PIHAK KEDUA wajib membayar ganti rugi kepada PIHAK PERTAMA (${esc_(company)}) sebesar Rp 1.000.000.000,- (satu miliar rupiah), di samping akan diproses secara hukum melalui pengadilan di Indonesia sesuai peraturan perundang-undangan yang berlaku.`,
+      "PIHAK PERTAMA berhak menghentikan kerja sama secara sepihak, menarik produk, serta melaporkan pelanggaran kepada BPOM dan aparat penegak hukum."])}
+    ${pasal(7, "KERAHASIAAN", ["PARA PIHAK wajib menjaga kerahasiaan seluruh informasi yang diperoleh dalam kerja sama ini, termasuk formula, harga dan data bisnis, dan tidak mengungkapkannya kepada pihak ketiga tanpa persetujuan tertulis pihak lainnya."])}
+    ${pasal(8, "KEADAAN KAHAR (FORCE MAJEURE)", ["Keterlambatan atau kegagalan pelaksanaan kewajiban akibat keadaan di luar kemampuan PARA PIHAK (bencana alam, kebakaran, wabah, kebijakan pemerintah, gangguan pasokan dan sejenisnya) tidak dianggap sebagai pelanggaran. Pihak yang mengalami wajib memberitahukan pihak lainnya selambat-lambatnya 7 (tujuh) hari."])}
+    ${pasal(9, "PENYELESAIAN PERSELISIHAN", [
+      "Perselisihan yang timbul diselesaikan terlebih dahulu secara musyawarah untuk mufakat.",
+      `Apabila musyawarah tidak mencapai mufakat, PARA PIHAK sepakat menyelesaikannya melalui Pengadilan Negeri ${st.courtCity ? esc_(st.courtCity) : "di wilayah hukum Republik Indonesia sesuai domisili PIHAK PERTAMA"}.`])}
+    ${pasal(10, "PENUTUP", [
+      "MoU ini berlaku sejak ditandatangani oleh PARA PIHAK sampai seluruh kewajiban PARA PIHAK selesai dilaksanakan.",
+      "MoU ini wajib ditandatangani oleh PIHAK PERTAMA dan PIHAK KEDUA di atas meterai Rp 10.000,- dan mempunyai kekuatan hukum yang sama.",
+      `PIHAK KEDUA wajib mengirimkan kembali lembar MoU yang telah ditandatangani di atas meterai (foto/scan) ke WhatsApp admin ${esc_(adminWa)}. Proses pekerjaan dimulai setelah MoU yang telah ditandatangani dan DP diterima oleh PIHAK PERTAMA.`])}
+    <table class="sig" style="page-break-inside:avoid"><tr>
+      <td><b>PIHAK PERTAMA</b><br>${esc_(company)}${st.signerTitle ? " — " + esc_(st.signerTitle) : ""}<div class="meterai">Meterai<br>Rp 10.000</div><div class="line"></div>${st.signerName ? esc_(st.signerName) : "(...........................................)"}</td>
+      <td><b>PIHAK KEDUA</b><br>Pemilik Merek "${esc_(c.brand)}"<div class="meterai">Meterai<br>Rp 10.000</div><div class="line"></div>${esc_(c.name)}</td>
+    </tr></table>
+    <div class="note" style="text-align:center;font-weight:bold">Kirim kembali MoU yang sudah ditandatangani di atas meterai Rp 10.000 ke WhatsApp admin${adminWa ? ": " + esc_(adminWa) : ""}</div>
+  </div>
+  </body></html>`;
+}
+
+/* Jalankan sekali dari editor (pilih fungsi testInvoice → Run) untuk memberi izin & mencoba membuat PDF contoh. */
+function testInvoice() {
+  const prices = loadPrices_();
+  const baseId = Object.keys(prices.bases)[0];
+  const packId = Object.keys(prices.packaging)[0];
+  const res = createInvoicePdf_({
+    id: "MG-TEST-" + Date.now(), createdAt: new Date().toISOString(),
+    customer: { name: "Contoh Customer", phone: "081234567890", email: "contoh@email.com", city: "Bandung", brand: "Brand Contoh" },
+    items: [{ baseId, baseName: "Contoh Base", vol: prices.bases[baseId].vol, unit: prices.bases[baseId].unit, qty: 50, actives: [], activeNames: [],
+      packagingId: packId, packagingLabel: packId, sticker: true, bpom: true, halal: true, sample: true }],
+  });
+  Logger.log(res.url);
 }

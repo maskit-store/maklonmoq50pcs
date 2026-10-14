@@ -40,6 +40,7 @@
     const hasCart = S.cart.length > 0;
     return `
     <section class="hero">
+      <img class="hero-logo" src="assets/img/logo.png" alt="MaklonGo by SAINSGO" width="250" height="54">
       <span class="highlight">🚀 ${esc(CFG.tagline)}</span>
       <h1>Bikin produk <mark>brand kamu sendiri</mark> mulai ${MOQ} pcs</h1>
       <p class="lead">Pilih base produk, tambah bahan aktif, dan pilih kemasan. Kirim pesanan ke admin lewat WhatsApp — invoice dikirim menyusul.</p>
@@ -53,7 +54,7 @@
       </div>
       <div class="trust"><span>MOQ ${MOQ} pcs / SKU</span><span>Bisa lebih dari 1 SKU</span><span>Termasuk BPOM & Halal</span></div>
     </section>
-    <footer class="footer">© ${new Date().getFullYear()} ${esc(CFG.appName)} · Maklon kosmetik qty kecil</footer>`;
+    <footer class="footer">© ${new Date().getFullYear()} ${esc(CFG.appName)} by SAINSGO · Maklon kosmetik qty kecil</footer>`;
   }
 
   function stepHead(view, sub) {
@@ -171,7 +172,7 @@
     const q = norm(ui.packQ);
     return C.packaging.filter((p) => {
       if (ui.packFilter === "match" && p.vol !== S.draft.vol) return false;
-      if (ui.packType !== "all" && p.type !== ui.packType) return false;
+      if (ui.packType === "new" ? !p.new : ui.packType !== "all" && p.type !== ui.packType) return false;
       if (q && !norm(`${p.code} ${p.name} ${p.variasi} ${p.vol || ""}`).includes(q)) return false;
       return true;
     });
@@ -182,8 +183,8 @@
     if (ui.packFilter === "match" && !matchCount) ui.packFilter = "all";
     const list = packList();
     const typePool = C.packaging.filter((p) => ui.packFilter !== "match" || p.vol === S.draft.vol);
-    const typeChips = [{ id: "all", name: "Semua jenis" }, ...C.packagingTypes].map((t) => {
-      const n = t.id === "all" ? typePool.length : typePool.filter((p) => p.type === t.id).length;
+    const typeChips = [{ id: "all", name: "Semua jenis" }, { id: "new", name: "✨ Katalog baru" }, ...C.packagingTypes].map((t) => {
+      const n = t.id === "all" ? typePool.length : t.id === "new" ? typePool.filter((p) => p.new).length : typePool.filter((p) => p.type === t.id).length;
       return n ? `<button class="chip ${ui.packType === t.id ? "active" : ""}" data-packtype="${t.id}">${esc(t.name)}<span class="c">${n}</span></button>` : "";
     }).join("");
     const shown = list.slice(0, ui.packLimit);
@@ -205,12 +206,13 @@
       <div class="pack-grid">${shown.map((p) => {
         const sel = !none && S.draft.packagingId === p.id;
         return `<button class="pack ${sel ? "selected" : ""}" data-pack="${p.id}">
-          <div class="img"><img loading="lazy" src="${p.img}" alt="${esc(p.name)}" width="320" height="320"></div>
-          ${p.vol ? `<span class="vol">${p.vol} ${p.unit}</span>` : ""}
+          <div class="img"><img loading="lazy" src="${p.img || "assets/img/logo-sm.png"}" alt="${esc(p.name)}" width="320" height="320"></div>
+          ${p.vol ? `<span class="vol">${p.volLabel || p.vol} ${p.unit}</span>` : ""}
+          ${p.new ? '<span class="new">Baru</span>' : ""}
           <span class="check">${sel ? icon.check : ""}</span>
           <div class="body"><div class="code">${esc(p.code)} · ${esc((IDX.packTypes[p.type] || {}).name || "")}</div>
             <div class="name">${esc(p.name)}</div>
-            <div class="meta">${p.vol ? `Volume ${p.vol} ${p.unit}` : "Aksesoris"}${p.variasi && p.variasi !== "-" ? ` · ${esc(p.variasi)}` : ""}</div></div>
+            <div class="meta">${p.vol ? `Volume ${p.volLabel || p.vol} ${p.unit}` : "Aksesoris"}${p.variasi && p.variasi !== "-" ? ` · ${esc(p.variasi)}` : ""}</div></div>
         </button>`;
       }).join("")}</div>
       ${list.length > shown.length ? `<button class="btn btn-ghost load-more" data-more>Tampilkan lebih banyak (${list.length - shown.length} lagi)</button>` : ""}
@@ -445,7 +447,7 @@
     const wa = window.MG.waLink(CFG.adminWhatsApp, msg);
     // Simpan otomatis ke Google Sheet (opsional)
     if (CFG.orderEndpoint) {
-      const body = JSON.stringify({ order, packed: window.MG.packOrder(order) });
+      const body = JSON.stringify({ order: window.MG.enrichOrder(order), packed: window.MG.packOrder(order) });
       try {
         if (!(navigator.sendBeacon && navigator.sendBeacon(CFG.orderEndpoint, new Blob([body], { type: "text/plain" }))))
           fetch(CFG.orderEndpoint, { method: "POST", mode: "no-cors", headers: { "Content-Type": "text/plain" }, body, keepalive: true });

@@ -20,6 +20,11 @@
   const modalRoot = document.getElementById("modalRoot");
   const A = { pw: null, prices: null, filePrices: null, dirty: false, tab: "orders", q: "", status: "all", priceQ: "", openId: null, packLimit: 60 };
 
+  // Logo untuk PDF (dimuat sekali sebagai data URL)
+  let LOGO = null;
+  fetch("assets/img/logo-pdf.jpg").then((r) => r.blob()).then((b) => new Promise((res) => { const fr = new FileReader(); fr.onload = () => res(fr.result); fr.readAsDataURL(b); }))
+    .then((d) => { LOGO = d; }).catch(() => {});
+
   const getOrders = () => store.get("mg_orders", []);
   const setOrders = (o) => store.set("mg_orders", o);
   const sheetCfg = () => store.get("mg_sheet", { endpoint: CFG.orderEndpoint || "", key: "" });
@@ -108,10 +113,24 @@
       const res = await fetch(`${endpoint}?key=${encodeURIComponent(key)}`);
       const data = await res.json();
       if (data.error) throw new Error(data.error);
-      const list = (data.orders || []).map((r) => { try { return r.packed ? window.MG.unpackOrder(r.packed) : r.order; } catch { return null; } });
+      const list = (data.orders || []).map((r) => { try { const o = r.packed ? window.MG.unpackOrder(r.packed) : r.order; if (o && r.pdf) o.pdfUrl = r.pdf; return o; } catch { return null; } });
       upsertOrders(list);
+      // simpan link PDF untuk order yang sudah ada
+      const pdf = Object.fromEntries((data.orders || []).filter((r) => r.pdf && r.order).map((r) => [r.order.id, r.pdf]));
+      setOrders(getOrders().map((o) => (pdf[o.id] && !o.pdfUrl ? { ...o, pdfUrl: pdf[o.id] } : o)));
       render();
     } catch (e) { toast("Gagal sinkron: " + e.message); }
+  }
+
+  async function syncPricesToDrive() {
+    const { endpoint, key } = sheetCfg();
+    if (!endpoint || !key) return toast("Isi URL Apps Script & ADMIN_KEY lalu klik Simpan dulu");
+    try {
+      const res = await fetch(endpoint, { method: "POST", headers: { "Content-Type": "text/plain" }, body: JSON.stringify({ action: "syncPrices", key, prices: A.prices }) });
+      const data = await res.json();
+      if (data.error) throw new Error(data.error);
+      toast("Harga & pengaturan tersinkron ke Google Drive ✓");
+    } catch (e) { toast("Gagal sinkron: " + e.message, 4500); }
   }
 
   /* ------------------------------------------------------------ prices store */
@@ -234,6 +253,7 @@
       <div class="row" style="margin-bottom:14px">
         <select class="input" id="ordStatus" style="width:auto">${STATUSES.map(([v, n]) => `<option value="${v}" ${o.status === v ? "selected" : ""}>${n}</option>`).join("")}</select>
         <button class="btn btn-primary btn-sm" data-pdf="${esc(o.id)}">⬇ Invoice PDF</button>
+        ${o.pdfUrl && o.pdfUrl.startsWith("http") ? `<a class="btn btn-ghost btn-sm" href="${esc(o.pdfUrl)}" target="_blank" rel="noopener">Invoice otomatis di Drive ↗</a>` : ""}
         <button class="btn btn-wa btn-sm" data-sendwa="${esc(o.id)}">Kirim invoice ke WA customer</button>
         <button class="btn btn-ghost btn-sm" data-copy="${esc(o.id)}">Salin ringkasan</button>
         <button class="btn btn-danger btn-sm" data-delorder="${esc(o.id)}">Hapus</button>
@@ -298,18 +318,18 @@
     const doc = new jsPDF({ unit: "mm", format: "a4" });
     const W = doc.internal.pageSize.getWidth();
     const M = 16;
-    const green = [31, 111, 92];
+    const green = [10, 138, 134];
     const rp = (n) => "Rp " + Math.round(n).toLocaleString("id-ID");
     const created = new Date();
     const due = new Date(created.getTime() + (Number(st.invoiceDueDays) || 7) * 864e5);
     const d = (x) => x.toLocaleDateString("id-ID", { day: "2-digit", month: "long", year: "numeric" });
 
     doc.setFillColor(...green); doc.rect(0, 0, W, 4, "F");
-    doc.setFont("helvetica", "bold"); doc.setFontSize(20); doc.setTextColor(29, 29, 31);
-    doc.text(st.companyName || CFG.appName, M, 20);
+    if (LOGO) doc.addImage(LOGO, "JPEG", M, 10, 62, 62 * 427 / 1973);
+    else { doc.setFont("helvetica", "bold"); doc.setFontSize(20); doc.setTextColor(29, 29, 31); doc.text(st.companyName || CFG.appName, M, 20); }
     doc.setFont("helvetica", "normal"); doc.setFontSize(9); doc.setTextColor(100);
-    const comp = [st.companyAddress, st.companyPhone && "WA: " + st.companyPhone, st.companyEmail].filter(Boolean);
-    doc.text(comp.length ? comp : [CFG.tagline], M, 26);
+    const comp = [st.companyName && st.companyName !== CFG.appName ? st.companyName : "", st.companyAddress, st.companyPhone && "WA: " + st.companyPhone, st.companyEmail].filter(Boolean);
+    doc.text(comp.length ? comp : [CFG.tagline], M, 28);
     doc.setFont("helvetica", "bold"); doc.setFontSize(22); doc.setTextColor(...green);
     doc.text("INVOICE", W - M, 20, { align: "right" });
     doc.setFont("helvetica", "normal"); doc.setFontSize(9.5); doc.setTextColor(60);
@@ -423,6 +443,7 @@
     };
 
     page();
+    if (LOGO) { doc.addImage(LOGO, "JPEG", W / 2 - 22, 10, 44, 44 * 427 / 1973); y = 30; }
     center("MEMORANDUM OF UNDERSTANDING (MoU)", 13, true);
     center("PERJANJIAN KERJA SAMA MAKLON PRODUK KOSMETIK", 11, true);
     doc.setFont("helvetica", "normal"); doc.setFontSize(9.5); doc.setTextColor(90);
@@ -566,12 +587,12 @@
     const rows = list.slice(0, A.packLimit).map((p) => {
       const pp = A.prices.packaging[p.id];
       const flag = !pp.filePrice || pp.filePrice > 100000;
-      return `<tr><td><img class="thumb" loading="lazy" src="${p.img}" alt=""></td><td><b>${esc(p.code)}</b> ${flag ? '<span class="flag">• cek harga</span>' : ""}<br><span class="small">${esc(p.name)}</span><br><span class="small muted">${esc(p.variasi)}</span></td>
-        <td class="num">${p.vol ? p.vol + " " + p.unit : "-"}</td>
+      return `<tr><td><img class="thumb" loading="lazy" src="${p.img || "assets/img/logo-sm.png"}" alt=""></td><td><b>${esc(p.code)}</b> ${p.new ? '<span class="tag new">Baru</span>' : ""} ${flag ? '<span class="flag">• cek harga</span>' : ""}<br><span class="small">${esc(p.name)}</span><br><span class="small muted">${esc(p.variasi)}</span></td>
+        <td class="num">${p.vol ? (p.volLabel || p.vol) + " " + p.unit : "-"}</td>
         <td class="num"><input class="inp" type="number" data-packprice="${p.id}" value="${pp.filePrice ?? ""}" placeholder="isi"></td>
-        <td class="num">${pp.price ? rupiah(pp.price) : "-"}</td></tr>`;
+        <td class="num">${pp.price ? rupiah(pp.price) : "-"}${pp.supplierDiscountPrice ? `<br><span class="small muted">Harga diskon supplier: ${rupiah(pp.supplierDiscountPrice)}</span>` : ""}</td></tr>`;
     }).join("");
-    return `<p class="muted small">Harga dari nama file gambar kemasan × ${st.packagingMarkup} (${Math.round((st.packagingMarkup - 1) * 100)}%). Ketik <b>cek</b> di pencarian untuk melihat kemasan yang harganya kosong / tidak wajar.</p>
+    return `<p class="muted small">Harga dari nama file gambar kemasan (kode W…) dan dari Excel katalog baru (kode MP…, kolom "Harga") × ${st.packagingMarkup} (${Math.round((st.packagingMarkup - 1) * 100)}%). Ketik <b>cek</b> di pencarian untuk melihat kemasan yang harganya kosong / tidak wajar.</p>
       ${priceSearch("Cari kode / nama kemasan… (ketik: cek)")}
       <div class="table-wrap"><table class="tbl"><thead><tr><th></th><th>Kemasan</th><th class="num">Volume</th><th class="num">Harga file</th><th class="num">Harga jual</th></tr></thead><tbody>${rows}</tbody></table></div>
       ${list.length > A.packLimit ? `<button class="btn btn-ghost load-more" data-act="morepack">Tampilkan lebih banyak (${list.length - A.packLimit})</button>` : ""}`;
@@ -607,11 +628,13 @@
         ${t("courtCity", "Kota Pengadilan Negeri untuk sengketa (mis. Bandung)")}
         <label class="checkrow" style="margin:0"><input type="checkbox" data-set="invoiceBreakdown" ${s.invoiceBreakdown ? "checked" : ""}><span><b>Tampilkan rincian komponen per pcs di invoice</b><span class="small muted">Base, bahan aktif, kemasan, sticker</span></span></label>
       </div>
-      <div class="card"><h3 style="margin-top:0">Sinkron Google Sheet (opsional)</h3>
-        <p class="small muted">Agar order otomatis tersimpan tanpa membuka link WA. Lihat <code>apps-script/README.md</code>.</p>
+      <div class="card"><h3 style="margin-top:0">Google Drive: invoice otomatis & rekap order</h3>
+        <p class="small muted">Setiap order otomatis dibuatkan invoice PDF di folder Drive "Invoice Generated" dan dicatat di Google Sheet. Panduan pemasangan: <code>apps-script/README.md</code>.</p>
         <div class="field"><label>URL Web App Apps Script</label><input id="sheetEndpoint" value="${esc(sh.endpoint)}" placeholder="https://script.google.com/macros/s/…/exec"></div>
         <div class="field"><label>Kunci admin (ADMIN_KEY)</label><input id="sheetKey" type="password" value="${esc(sh.key)}"></div>
-        <button class="btn btn-ghost btn-sm" data-act="saveSheet">Simpan</button>
+        <div class="row"><button class="btn btn-ghost btn-sm" data-act="saveSheet">Simpan</button>
+        <button class="btn btn-primary btn-sm" data-act="syncPrices">Sinkron harga ke Google Drive</button></div>
+        <p class="small muted" style="margin-bottom:0">Klik "Sinkron harga" setiap kali harga / pengaturan invoice diubah, agar invoice PDF otomatis di Drive memakai angka terbaru.</p>
       </div>
       <div class="card"><h3 style="margin-top:0">Keamanan & data</h3>
         <p class="small muted">Harga disimpan terenkripsi di <code>data/prices.enc.json</code>. Setelah mengubah harga / password, download file baru lalu upload ke GitHub (replace file lama).</p>
@@ -674,6 +697,7 @@
       case "doImport": { const v = document.getElementById("importText").value; modalRoot.innerHTML = ""; return importText(v); }
       case "csv": return exportCsv();
       case "morepack": A.packLimit += 120; return render();
+      case "syncPrices": return syncPricesToDrive();
       case "saveSheet": store.set("mg_sheet", { endpoint: document.getElementById("sheetEndpoint").value.trim(), key: document.getElementById("sheetKey").value }); return toast("Tersimpan");
       case "changePw": {
         const pw = document.getElementById("newPw").value;

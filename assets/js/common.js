@@ -45,7 +45,7 @@
     if (item.noPackaging) return "Tidak ada pilihan kemasan — Admin bantu carikan yang lain";
     const p = IDX.packaging[item.packagingId];
     if (!p) return "-";
-    const vol = p.vol ? ` ${p.vol} ${p.unit}` : "";
+    const vol = p.vol ? ` ${p.volLabel || p.vol} ${p.unit}` : "";
     return `${p.code} · ${p.name}${vol}${p.variasi && p.variasi !== "-" ? " · " + p.variasi : ""}`;
   }
 
@@ -126,6 +126,17 @@
     return L.join("\n");
   }
 
+  // Tambahkan nama-nama yang mudah dibaca (untuk invoice otomatis di Google Apps Script)
+  function enrichOrder(order) {
+    return { ...order, items: order.items.map((it) => {
+      const b = IDX.bases[it.baseId];
+      return { ...it, baseName: b ? b.name : it.baseId, unit: b ? b.unit : it.unit || "ml",
+        baseActives: b ? baseActives(b, it.variant) : [],
+        activeNames: (it.actives || []).map((id) => (IDX.actives[id] || {}).name || id),
+        packagingLabel: packagingLabel(it) };
+    }) };
+  }
+
   function waLink(number, text) {
     return `https://wa.me/${normalizePhone(number)}?text=${encodeURIComponent(text)}`;
   }
@@ -145,5 +156,5 @@
   };
 
   window.MG = { C, CFG, IDX, esc, rupiah, fmtDate, normalizePhone, newOrderId, baseActives, packagingLabel,
-    packOrder, unpackOrder, orderMessage, waLink, toast, store };
+    packOrder, unpackOrder, enrichOrder, orderMessage, waLink, toast, store };
 })();

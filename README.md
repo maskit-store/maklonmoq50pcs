@@ -12,7 +12,7 @@ Web app statis (HTML/CSS/JS, tanpa server) untuk order maklon skincare & persona
 1. **Base produk** — 60 base dari produk Maskit kategori kosmetik & personal care, dengan nama baru yang sederhana (tanpa kata bayi/anak/kids/mama). Aroma/varian sesuai aslinya, dan bahan aktif yang sudah terkandung ditampilkan.
 2. **Ukuran & jumlah** — volume akhir per produk + jumlah (min. 50 pcs).
 3. **Bahan aktif tambahan** — 52 bahan aktif dengan kategori (Brightening, Calming, Hydrating, Anti-Acne, dll.; satu bahan bisa di beberapa kategori) + kolom request bahan aktif lain.
-4. **Kemasan** — 900 pilihan kemasan beserta gambar (dari folder Google Drive), filter "sesuai volume", jenis, dan pencarian. Ada opsi **"Tidak ada pilihan kemasan, Admin bantu carikan yang lain"**.
+4. **Kemasan** — 1.024 pilihan kemasan beserta gambar: 900 dari folder Drive lama (kode W…) + **katalog baru 124 varian / 98 produk** (kode MP…, badge "Baru", filter "Katalog baru"), filter "sesuai volume", jenis, dan pencarian. Ada opsi **"Tidak ada pilihan kemasan, Admin bantu carikan yang lain"**.
 5. **Legalitas (wajib dicentang)** — Sticker, Biaya BPOM & Lab (Rp 3.500.000/SKU), Halal (Rp 3.500.000/SKU) + nama produk (wajib).
 6. **Request sample?** — Ya (Rp 555.000/SKU, incl. PPN) / Tidak.
 7. Simpan SKU → bisa **tambah SKU lain** (kembali ke langkah 1) → **Data diri** (Nama, HP, Email, Kota, Nama Brand, **Catatan Brand** — wajib, Catatan lain) → info pembayaran (harga via invoice, belum termasuk ongkir, DP 50%, pelunasan + ongkir setelah NIE BPOM terbit, MoU bermeterai) yang wajib disetujui → **Kirim via WhatsApp** dengan **nomor order** otomatis (`MG-YYMMDD-XXXXX`).
@@ -25,7 +25,7 @@ Pilihan volume hanya volume yang tersedia kemasannya (10–1000 ml/g).
 |---|---|
 | Base | harga (kolom *Harga diskon* di `discount_nominate`) ÷ volume asli × volume pesanan |
 | Bahan aktif | harga master ÷ per_qty (= harga/gram, berat = volume) × (volume × **1%**) × **1,35** (scrap factor) |
-| Kemasan | harga di nama file gambar × **1,35** |
+| Kemasan | W…: harga di nama file gambar × **1,35**; MP…: kolom **Harga** di Excel katalog baru × **1,35** (kolom Diskon ditampilkan sebagai referensi di admin) |
 | Sticker | diatur di Pengaturan (default Rp 0) |
 | Per SKU | harga/pcs × qty + BPOM & Lab + Halal + sample (jika dipilih) |
 | DP | 50% dari total (tanpa ongkir); pelunasan = sisa + ongkir setelah NIE BPOM terbit |
@@ -33,6 +33,10 @@ Pilihan volume hanya volume yang tersedia kemasannya (10–1000 ml/g).
 PDF invoice otomatis berisi **lembar MoU** (10 pasal, termasuk sanksi Rp 1 miliar + proses hukum untuk penyalahgunaan izin edar / pemalsuan produk), kolom tanda tangan kedua pihak dengan kotak meterai Rp 10.000, dan instruksi mengirim kembali MoU bertanda tangan ke WA admin. Isi nama penandatangan, jabatan & kota pengadilan di **Pengaturan**.
 
 Semua angka bisa diubah di dashboard (master harga & per order), plus diskon, ongkir, DP%.
+
+## Invoice PDF otomatis ke Google Drive
+
+Setiap order otomatis dibuatkan invoice + MoU (PDF, dengan logo) di folder Drive **Invoice Generated** dan dicatat di Google Sheet, lewat Google Apps Script milik Anda. Panduan pasang: [`apps-script/README.md`](apps-script/README.md).
 
 ## Cara order masuk ke dashboard admin
 

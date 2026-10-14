@@ -240,6 +240,77 @@ def build_packaging(settings, make_images):
     return items, secret
 
 
+# Katalog kemasan baru (MP0001…): harga supplier dari Excel, foto dari folder Drive
+def mp_type(name):
+    n = name.upper()
+    if re.search(r"LIP|MASKARA|EYELINER|KUTEK|LIPSTIK", n):
+        return "makeup"
+    if re.search(r"POT|JAR|CUSHION", n):
+        return "pot"
+    if re.search(r"TUBE", n):
+        return "tube"
+    if re.search(r"ROLL ON", n):
+        return "rollon"
+    if re.search(r"PIPET", n):
+        return "pipet"
+    if re.search(r"SPRAY|PARFUM|MIST", n):
+        return "spray"
+    if re.search(r"PUMP|AIRLESS|FOAM", n):
+        return "pump"
+    if re.search(r"FLIPTOP", n):
+        return "fliptop"
+    return "botol"
+
+
+def parse_mp_volume(v):
+    # "8-10 ml" → isi 8 (batas bawah, aman), label tetap "8-10"; "3,5 gr" → 3.5 g
+    m = re.match(r"^\s*([\d.,]+)(?:\s*-\s*([\d.,]+))?\s*(ml|gr|g)\s*$", str(v or ""), re.I)
+    if not m:
+        return None, None, None
+    lo = float(m.group(1).replace(",", "."))
+    unit = "ml" if m.group(3).lower() == "ml" else "g"
+    label = f"{m.group(1)}-{m.group(2)}" if m.group(2) else None
+    return (int(lo) if lo.is_integer() else lo), unit, label
+
+
+def build_packaging_mp(settings, make_images):
+    path = SRC / "kemasan_mp.xlsx"
+    if not path.exists():
+        return [], {}
+    photos = {t.split(" - ")[0]: i for i, t in json.loads((SRC / "kemasan_mp_drive.json").read_text())}
+    ws = openpyxl.load_workbook(path, data_only=True)["Produk"]
+    items, secret = [], {}
+    if make_images:
+        from PIL import Image
+        IMG_DIR.mkdir(parents=True, exist_ok=True)
+    for r in ws.iter_rows(min_row=2, values_only=True):
+        if not r[1]:
+            continue
+        parent, sku, name, vol_raw = str(r[0]).strip(), str(r[1]).strip(), str(r[2]).strip(), r[3]
+        vol, unit, vlabel = parse_mp_volume(vol_raw)
+        opts = [str(x).strip() for x in (r[10], r[12], r[14]) if x and str(x).strip()]
+        variasi = ", ".join(o if o.isupper() is False else o.title() for o in opts) or "-"
+        img = f"assets/img/kemasan/{parent.lower()}.webp"
+        drive_id = photos.get(parent)
+        if make_images and drive_id:
+            src = SRC / "thumbs" / f"{drive_id}.png"
+            dst = ROOT / img
+            if src.exists() and not dst.exists():
+                im = Image.open(src).convert("RGB")
+                im.thumbnail((320, 320))
+                im.save(dst, "WEBP", quality=72, method=6)
+        item = {"id": sku, "code": sku, "name": name, "variasi": variasi, "vol": vol, "unit": unit,
+                "type": mp_type(name), "img": img if drive_id else None, "new": True}
+        if vlabel:
+            item["volLabel"] = vlabel
+        items.append(item)
+        harga, diskon = float(r[15] or 0), float(r[16] or 0)
+        secret[sku] = {"filePrice": round(harga), "supplierDiscountPrice": round(diskon),
+                       "price": round(harga * settings["packagingMarkup"]) if harga else None,
+                       "file": f"{sku} - {name} - {vol_raw}", "driveId": drive_id, "source": "Produk_MaklonGo_-_Gabungan_SKU.xlsx"}
+    return items, secret
+
+
 # --------------------------------------------------------------- enkripsi
 def encrypt(obj, password):
     salt, iv = os.urandom(16), os.urandom(12)
@@ -260,6 +331,8 @@ def main():
     bases_pub, bases_sec = build_bases()
     cats, actives_pub, actives_sec = build_actives()
     pack_pub, pack_sec = build_packaging(settings, make_images)
+    mp_pub, mp_sec = build_packaging_mp(settings, make_images)
+    pack_pub, pack_sec = mp_pub + pack_pub, {**mp_sec, **pack_sec}
 
     stamp = time.strftime("%Y-%m-%d")
     catalog = {
@@ -284,6 +357,7 @@ def main():
             {"id": "tube", "name": "Tube"},
             {"id": "jerigen", "name": "Jerigen"},
             {"id": "rollon", "name": "Roll On"},
+            {"id": "makeup", "name": "Kemasan Make Up"},
             {"id": "aksesoris", "name": "Tutup & Pump"},
         ],
         "packaging": pack_pub,
