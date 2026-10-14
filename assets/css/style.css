@@ -237,3 +237,9 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 13.5px; }
 .wa-float.raised { bottom: calc(88px + env(safe-area-inset-bottom)); }
 .wa-float.raised .wa-label { display: none; }
 @media (max-width: 420px) { .wa-float .wa-label { display: none; } }
+/* Admin: katalog tambah / edit / hapus */
+.tbl tr.deleted td { opacity: .5; }
+.tbl tr.deleted td:last-child { opacity: 1; }
+.tag.red { background: var(--danger-soft); color: var(--danger); }
+.btn.danger { color: var(--danger); }
+@media (min-width: 640px) { .form-2 { grid-template-columns: 1fr 1fr; } .form-2 > .field:has(textarea), .form-2 > .checkrow, .form-2 > .field:has(.chips) { grid-column: 1 / -1; } }

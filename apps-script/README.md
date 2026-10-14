@@ -15,6 +15,12 @@ Setelah dipasang, **setiap kali customer menekan "Kirim via WhatsApp"**:
    membaca tab ini tetap bisa memakainya. Baris contoh berisi `GANTI_FILE_ID` dihapus otomatis.
 3. Di dashboard admin, tombol **⟳ Sinkron Google Sheet** menarik semua order + link invoice PDF.
 
+4. Tambah / edit / hapus **base, bahan aktif & kemasan** di dashboard admin tersimpan ke Google Drive:
+   - `MaklonGo - katalog (perubahan admin).json`: nama, deskripsi, kategori, volume, foto (tanpa harga),
+     dibaca publik oleh web customer sehingga perubahan langsung tampil tanpa upload file ke hosting.
+   - Foto kemasan baru diunggah ke folder **MaklonGo - foto kemasan** (dibuat otomatis, tiap foto bisa dilihat via link).
+   - Harga item baru ikut tersimpan di file harga privat.
+
 Harga tidak pernah dikirim ke browser customer: script membaca harga dari file privat
 `MaklonGo - harga (RAHASIA).json` di My Drive Anda, yang diisi dari dashboard admin.
 

@@ -44,16 +44,30 @@ function doPost(e) {
 
   if (data.action === "syncPrices") {
     if (!checkKey_(data.key)) return json_({ error: "unauthorized" });
-    const props = PropertiesService.getScriptProperties();
-    const content = JSON.stringify(data.prices);
-    let file = null;
-    const id = props.getProperty("PRICES_FILE_ID");
-    if (id) { try { file = DriveApp.getFileById(id); } catch (err) { file = null; } }
-    if (file) file.setContent(content);
-    else { file = DriveApp.createFile("MaklonGo - harga (RAHASIA).json", content, MimeType.PLAIN_TEXT); props.setProperty("PRICES_FILE_ID", file.getId()); }
-    const savedAt = new Date().toISOString();
-    props.setProperty("PRICES_SAVED_AT", savedAt);
+    const savedAt = saveJsonFile_("PRICES", "MaklonGo - harga (RAHASIA).json", data.prices);
     return json_({ ok: true, synced: savedAt });
+  }
+
+  // Tambah / edit / hapus base, bahan aktif & kemasan dari dashboard (tanpa harga — dibaca publik oleh web customer)
+  if (data.action === "saveCatalog") {
+    if (!checkKey_(data.key)) return json_({ error: "unauthorized" });
+    const savedAt = saveJsonFile_("CATALOG", "MaklonGo - katalog (perubahan admin).json", data.catalog || {});
+    return json_({ ok: true, saved: savedAt });
+  }
+
+  // Upload foto kemasan baru → folder Drive "MaklonGo - foto kemasan" (dibagikan: siapa saja yang punya link boleh lihat)
+  if (data.action === "uploadImage") {
+    if (!checkKey_(data.key)) return json_({ error: "unauthorized" });
+    const m = String(data.dataUrl || "").match(/^data:(image\/[a-z+]+);base64,(.+)$/);
+    if (!m) return json_({ error: "gambar tidak valid" });
+    const props = PropertiesService.getScriptProperties();
+    let folder = null;
+    const fid = props.getProperty("IMAGE_FOLDER_ID");
+    if (fid) { try { folder = DriveApp.getFolderById(fid); } catch (err) { folder = null; } }
+    if (!folder) { folder = DriveApp.createFolder("MaklonGo - foto kemasan"); props.setProperty("IMAGE_FOLDER_ID", folder.getId()); }
+    const file = folder.createFile(Utilities.newBlob(Utilities.base64Decode(m[2]), m[1], data.name || "kemasan.jpg"));
+    file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+    return json_({ ok: true, id: file.getId(), url: "https://lh3.googleusercontent.com/d/" + file.getId() + "=w600" });
   }
 
   // Simpan perubahan order dari dashboard (status & penyesuaian harga) agar sama di semua perangkat
@@ -112,12 +126,15 @@ function doPost(e) {
 }
 
 function doGet(e) {
+  // Publik: perubahan katalog (tanpa harga) untuk web customer
+  if (e.parameter.action === "catalog") {
+    const cat = readJsonFile_("CATALOG");
+    return json_({ catalog: cat.data, savedAt: cat.savedAt });
+  }
   if (!checkKey_(e.parameter.key)) return json_({ error: "unauthorized" });
   if (e.parameter.action === "prices") {
-    const props = PropertiesService.getScriptProperties();
-    const id = props.getProperty("PRICES_FILE_ID");
-    if (!id) return json_({ prices: null });
-    return json_({ prices: JSON.parse(DriveApp.getFileById(id).getBlob().getDataAsString()), savedAt: props.getProperty("PRICES_SAVED_AT") });
+    const p = readJsonFile_("PRICES");
+    return json_({ prices: p.data, savedAt: p.savedAt });
   }
   const sh = invoiceSheet_();
   const n = sh.getLastRow() - 1;
@@ -125,6 +142,26 @@ function doGet(e) {
   const rows = sh.getRange(2, 1, n, INVOICE_HEADERS.length).getValues();
   return json_({ orders: rows.filter((r) => r[COL.json - 1]).map((r) => ({
     packed: r[COL.packed - 1] || null, order: JSON.parse(r[COL.json - 1]), pdf: r[COL.view - 1] || r[COL.link - 1] })) });
+}
+
+/* File JSON di My Drive; ID disimpan di Script Properties <NAME>_FILE_ID */
+function saveJsonFile_(name, title, obj) {
+  const props = PropertiesService.getScriptProperties();
+  const content = JSON.stringify(obj);
+  let file = null;
+  const id = props.getProperty(name + "_FILE_ID");
+  if (id) { try { file = DriveApp.getFileById(id); } catch (err) { file = null; } }
+  if (file) file.setContent(content);
+  else { file = DriveApp.createFile(title, content, MimeType.PLAIN_TEXT); props.setProperty(name + "_FILE_ID", file.getId()); }
+  const savedAt = new Date().toISOString();
+  props.setProperty(name + "_SAVED_AT", savedAt);
+  return savedAt;
+}
+function readJsonFile_(name) {
+  const props = PropertiesService.getScriptProperties();
+  const id = props.getProperty(name + "_FILE_ID");
+  if (!id) return { data: null, savedAt: null };
+  return { data: JSON.parse(DriveApp.getFileById(id).getBlob().getDataAsString()), savedAt: props.getProperty(name + "_SAVED_AT") };
 }
 
 function checkKey_(k) {

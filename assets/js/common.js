@@ -4,14 +4,58 @@
   const CFG = window.MG_CONFIG;
 
   const byId = (arr) => Object.fromEntries(arr.map((x) => [x.id, x]));
-  const IDX = {
-    bases: byId(C.bases),
-    actives: byId(C.actives),
-    activeCats: byId(C.activeCategories),
-    packaging: byId(C.packaging),
-    baseCats: byId(C.baseCategories),
-    packTypes: byId(C.packagingTypes),
-  };
+  const IDX = {};
+  function reindex() {
+    Object.assign(IDX, {
+      bases: byId(C.bases),
+      actives: byId(C.actives),
+      activeCats: byId(C.activeCategories),
+      packaging: byId(C.packaging),
+      baseCats: byId(C.baseCategories),
+      packTypes: byId(C.packagingTypes),
+    });
+  }
+
+  /*
+   * Perubahan katalog dari dashboard admin (tambah / edit / hapus) disimpan di Google Drive lewat Apps Script
+   * dan diterapkan di atas katalog bawaan (catalog.js). Format: { bases: { id: item | {id, deleted:true} }, actives, packaging }.
+   * Customer: item yang dihapus disembunyikan. Admin (keepDeleted): tetap ada dengan tanda deleted agar order lama terbaca.
+   */
+  const ORIG = { bases: C.bases.slice(), actives: C.actives.slice(), packaging: C.packaging.slice() };
+  const CAT_SECS = ["bases", "actives", "packaging"];
+  let catOvr = {};
+  function applyCatalog(ovr, keepDeleted) {
+    catOvr = ovr || {};
+    CAT_SECS.forEach((sec) => {
+      const o = catOvr[sec] || {};
+      const out = ORIG[sec].map((x) => (o[x.id] ? { ...o[x.id], id: x.id } : x));
+      Object.keys(o).forEach((id) => { if (!ORIG[sec].some((x) => x.id === id)) out.push({ ...o[id], id }); });
+      C[sec].splice(0, C[sec].length, ...out.filter((x) => keepDeleted || !x.deleted));
+    });
+    reindex();
+  }
+  const isOriginal = (sec, id) => ORIG[sec].some((x) => x.id === id);
+  const originalItem = (sec, id) => ORIG[sec].find((x) => x.id === id);
+
+  // Ambil perubahan katalog terbaru (publik, tanpa harga). Salinan terakhir disimpan di browser agar langsung tampil.
+  function fetchCatalog(endpoint = CFG.orderEndpoint) {
+    if (!endpoint) return Promise.resolve(null);
+    return fetch(`${endpoint}?action=catalog`).then((r) => r.json())
+      .then((d) => (d && d.catalog !== undefined && !d.error ? d.catalog || {} : null)).catch(() => null);
+  }
+  const cachedCatalog = (() => { try { return JSON.parse(localStorage.getItem("mg_catalog") || "null"); } catch { return null; } })();
+  applyCatalog(cachedCatalog, false);
+  // Dipanggil customer app: resolve true jika katalog berubah dibanding salinan lokal
+  function refreshCatalog() {
+    return fetchCatalog().then((cat) => {
+      if (!cat) return false;
+      const s = JSON.stringify(cat);
+      if (s === JSON.stringify(cachedCatalog || {})) return false;
+      try { localStorage.setItem("mg_catalog", s); } catch {}
+      applyCatalog(cat, false);
+      return true;
+    });
+  }
 
   const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   const rupiah = (n) => "Rp " + Math.round(Number(n) || 0).toLocaleString("id-ID");
@@ -162,6 +206,6 @@
     del(k) { try { localStorage.removeItem(k); } catch {} },
   };
 
-  window.MG = { isMobile, C, CFG, IDX, esc, rupiah, fmtDate, normalizePhone, newOrderId, baseActives, packagingLabel,
+  window.MG = { isMobile, applyCatalog, fetchCatalog, refreshCatalog, isOriginal, originalItem, C, CFG, IDX, esc, rupiah, fmtDate, normalizePhone, newOrderId, baseActives, packagingLabel,
     packOrder, unpackOrder, enrichOrder, orderMessage, waLink, toast, store };
 })();

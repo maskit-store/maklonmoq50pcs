@@ -102,7 +102,8 @@
   }
 
   // Hanya volume yang tersedia kemasannya
-  const VOLS = [...new Set(C.packaging.filter((p) => p.vol && p.vol <= 1000).map((p) => p.vol))].sort((a, b) => a - b);
+  const calcVols = () => [...new Set(C.packaging.filter((p) => p.vol && p.vol <= 1000).map((p) => p.vol))].sort((a, b) => a - b);
+  let VOLS = calcVols();
   function volumeOptions() { return VOLS; }
   // Volume kemasan terdekat dengan ukuran asli base (seri → pilih yang lebih besar)
   function defaultVol(b) {
@@ -158,7 +159,7 @@
         return `<button class="option multi ${sel ? "selected" : ""}" data-active="${a.id}">
           <span class="check">${sel ? icon.check : ""}</span>
           <div class="title">${esc(a.name)} ${dup ? '<span class="badge">sudah ada di base</span>' : ""}</div>
-          <div class="tags">${a.cats.map((c) => `<span class="tag">${esc(IDX.activeCats[c].name)}</span>`).join("")}</div>
+          <div class="tags">${a.cats.filter((c) => IDX.activeCats[c]).map((c) => `<span class="tag">${esc(IDX.activeCats[c].name)}</span>`).join("")}</div>
         </button>`;
       }).join("") || '<p class="muted">Tidak ada bahan aktif yang cocok.</p>'}</div>
       <div class="card" style="margin-top:14px">
@@ -249,8 +250,8 @@
   }
 
   function skuCard(it, i) {
-    const b = IDX.bases[it.baseId];
-    const act = it.actives.map((id) => IDX.actives[id].name);
+    const b = IDX.bases[it.baseId] || { name: it.baseName || it.baseId, unit: it.unit || "ml" };
+    const act = it.actives.map((id) => (IDX.actives[id] || {}).name || id);
     return `<div class="sku">
       <div class="sku-head"><div><span class="badge">SKU ${i + 1}</span><h3 style="margin-top:6px">${esc(it.productName || b.name)}</h3></div></div>
       <dl class="kv">
@@ -589,4 +590,16 @@
   });
 
   render();
+
+  // Terapkan perubahan katalog terbaru dari admin (tambah / edit / hapus base, bahan aktif, kemasan)
+  window.MG.refreshCatalog().then((changed) => {
+    if (!changed) return;
+    VOLS = calcVols();
+    const d = S.draft;
+    d.actives = d.actives.filter((id) => IDX.actives[id]);
+    if (d.packagingId && !IDX.packaging[d.packagingId]) d.packagingId = null;
+    if (d.baseId && !IDX.bases[d.baseId]) d.baseId = null;
+    persist();
+    if (["home", "base", "size", "actives", "pack"].includes(S.view)) render();
+  });
 })();

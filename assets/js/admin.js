@@ -18,7 +18,7 @@
 
   const root = document.getElementById("admin");
   const modalRoot = document.getElementById("modalRoot");
-  const A = { pw: null, prices: null, filePrices: null, dirty: false, sync: { state: "off" }, tab: "orders", q: "", status: "all", priceQ: "", openId: null, packLimit: 60 };
+  const A = { pw: null, prices: null, filePrices: null, cat: { bases: {}, actives: {}, packaging: {} }, dirty: false, sync: { state: "off" }, tab: "orders", q: "", status: "all", priceQ: "", openId: null, packLimit: 60 };
 
   // Logo untuk PDF (dimuat sekali sebagai data URL)
   let LOGO = null;
@@ -63,7 +63,7 @@
     fixPhone(A.prices.settings);
     try { sessionStorage.setItem("mg_pw", pw); } catch {}
     document.getElementById("btnLogout").classList.remove("hidden");
-    await loadRemotePrices();
+    await Promise.all([loadRemotePrices(), loadCatalog()]);
     handleImportHash();
     render();
     if (A.sync.state === "ok") syncSheet(true);
@@ -74,7 +74,8 @@
   function mergePrices(file, remote) {
     const out = structuredClone(file);
     ["bases", "actives", "packaging"].forEach((sec) => {
-      Object.entries((remote && remote[sec]) || {}).forEach(([k, v]) => { if (out[sec][k]) out[sec][k] = { ...out[sec][k], ...v }; });
+      out[sec] = out[sec] || {};
+      Object.entries((remote && remote[sec]) || {}).forEach(([k, v]) => { out[sec][k] = out[sec][k] ? { ...out[sec][k], ...v } : v; });
     });
     out.settings = { ...DEFAULT_SETTINGS, ...file.settings, ...((remote && remote.settings) || {}) };
     fixPhone(out.settings);
@@ -109,8 +110,260 @@
     const { endpoint, key } = sheetCfg();
     const res = await fetch(endpoint, { method: "POST", headers: { "Content-Type": "text/plain" }, body: JSON.stringify({ ...body, key }) });
     const data = await res.json();
-    if (data.error) throw new Error(data.error === "unauthorized" ? "ADMIN_KEY salah / belum diisi" : data.error);
+    if (data.error) throw new Error(data.error === "unauthorized" ? "ADMIN_KEY salah / belum diisi"
+      : data.error === "invalid order" ? "Apps Script belum versi terbaru — tempel ulang Code.gs lalu Deploy → New version" : data.error);
     return data;
+  }
+
+  /* ------------------------------------------------------------ katalog: tambah / edit / hapus (disimpan ke Google Drive) */
+  async function loadCatalog() {
+    const local = store.get("mg_admin_catalog", null);
+    const { endpoint } = sheetCfg();
+    const remote = endpoint ? await window.MG.fetchCatalog(endpoint) : null;
+    A.catLoadFailed = !!endpoint && !remote;
+    const size = (c) => (c ? ["bases", "actives", "packaging"].reduce((n, k) => n + Object.keys(c[k] || {}).length, 0) : 0);
+    // Belum ada di Drive tapi ada perubahan lokal → pakai lokal lalu simpan ke Drive
+    const useLocal = !remote || (!size(remote) && size(local));
+    A.cat = { bases: {}, actives: {}, packaging: {}, ...((useLocal ? local : remote) || {}) };
+    window.MG.applyCatalog(A.cat, true);
+    if (remote && useLocal && size(local)) pushCatalog();
+  }
+
+  async function pushCatalog() {
+    const { endpoint, key } = sheetCfg();
+    if (!endpoint || !key) { A.dirty = true; A.sync = { state: "off" }; return renderSync(); }
+    A.sync = { state: "saving" }; renderSync();
+    try {
+      if (A.catLoadFailed) {
+        // Katalog di Drive belum terbaca → ambil dulu agar perubahan lain tidak tertimpa
+        const remote = await window.MG.fetchCatalog(endpoint);
+        if (!remote) throw new Error("katalog di Google Drive belum bisa dibaca (Apps Script versi lama?)");
+        ["bases", "actives", "packaging"].forEach((k) => { A.cat[k] = { ...(remote[k] || {}), ...(A.cat[k] || {}) }; });
+        A.catLoadFailed = false;
+        store.set("mg_admin_catalog", A.cat); window.MG.applyCatalog(A.cat, true);
+      }
+      const d = await post({ action: "saveCatalog", catalog: A.cat });
+      A.sync = { state: "ok", at: d.saved };
+    } catch (e) { A.sync = { state: "error", msg: e.message }; }
+    renderSync();
+  }
+  let catTimer;
+  function saveCatalog() {
+    store.set("mg_admin_catalog", A.cat);
+    window.MG.applyCatalog(A.cat, true);
+    clearTimeout(catTimer); catTimer = setTimeout(pushCatalog, 600);
+  }
+
+  const SEC_NAME = { bases: "base", actives: "bahan aktif", packaging: "kemasan" };
+  function putItem(sec, item) {
+    const orig = window.MG.originalItem(sec, item.id);
+    if (orig && JSON.stringify(orig) === JSON.stringify(item)) delete A.cat[sec][item.id];
+    else A.cat[sec][item.id] = item;
+    saveCatalog();
+  }
+  function deleteItem(sec, id) {
+    const it = IDX[sec][id];
+    if (!it || !confirm(`Hapus ${SEC_NAME[sec]} "${it.name}"?\nItem tidak tampil lagi di web customer. Order lama tetap terbaca & item bisa dipulihkan.`)) return;
+    A.cat[sec][id] = { ...it, deleted: true };
+    saveCatalog(); render(); toast(`${it.name} dihapus`);
+  }
+  function restoreItem(sec, id) {
+    const it = { ...IDX[sec][id] };
+    delete it.deleted;
+    putItem(sec, it); render(); toast(`${it.name} dipulihkan`);
+  }
+  // Tanda kecil di daftar: ditambah admin / diedit / dihapus
+  function itemTags(sec, x) {
+    if (x.deleted) return '<span class="tag red">Dihapus</span>';
+    if (!window.MG.isOriginal(sec, x.id)) return '<span class="tag yellow">Ditambah admin</span>';
+    if (A.cat[sec][x.id]) return '<span class="tag green">Diedit</span>';
+    return "";
+  }
+  function itemActions(sec, x) {
+    return x.deleted ? `<button class="btn btn-ghost btn-sm" data-restore="${sec}:${esc(x.id)}">Pulihkan</button>`
+      : `<div class="row" style="gap:6px;flex-wrap:nowrap"><button class="btn btn-ghost btn-sm" data-edititem="${sec}:${esc(x.id)}">Edit</button><button class="btn btn-ghost btn-sm danger" data-delitem="${sec}:${esc(x.id)}">Hapus</button></div>`;
+  }
+  function nextId(prefix, list) {
+    const n = list.reduce((m, x) => { const k = String(x.id).match(new RegExp("^" + prefix + "(\\d+)$")); return k ? Math.max(m, +k[1]) : m; }, 0);
+    return prefix + String(n + 1).padStart(2, "0");
+  }
+
+  // Form modal sederhana. fields: [{k, label, type, opts, req, hint, ph}]
+  function formModal(title, fields, vals, onSave, extraHtml = "") {
+    const f = (x) => {
+      const v = vals[x.k] ?? "";
+      const lab = `<label for="ff-${x.k}">${x.label}${x.req ? ' <span class="req">*</span>' : ""}</label>`;
+      const hint = x.hint ? `<div class="hint">${x.hint}</div>` : "";
+      if (x.type === "select") return `<div class="field">${lab}<select id="ff-${x.k}">${x.opts.map(([o, n]) => `<option value="${esc(o)}" ${String(v) === String(o) ? "selected" : ""}>${esc(n)}</option>`).join("")}</select>${hint}</div>`;
+      if (x.type === "textarea") return `<div class="field">${lab}<textarea id="ff-${x.k}" placeholder="${esc(x.ph || "")}">${esc(v)}</textarea>${hint}</div>`;
+      if (x.type === "checks") return `<div class="field"><label>${x.label}${x.req ? ' <span class="req">*</span>' : ""}</label><div class="chips" style="margin:0">${x.opts.map(([o, n]) => `<label class="chip ${(v || []).includes(o) ? "active" : ""}"><input type="checkbox" data-ffcheck="${x.k}" value="${esc(o)}" ${(v || []).includes(o) ? "checked" : ""} hidden>${esc(n)}</label>`).join("")}</div>${hint}</div>`;
+      if (x.type === "checkbox") return `<label class="checkrow" style="margin-bottom:14px"><input type="checkbox" id="ff-${x.k}" ${v ? "checked" : ""}><span><b>${x.label}</b>${x.hint ? `<span class="small muted">${x.hint}</span>` : ""}</span></label>`;
+      return `<div class="field">${lab}<input id="ff-${x.k}" type="${x.type || "text"}" ${x.type === "number" ? 'step="any" inputmode="decimal"' : ""} value="${esc(v)}" placeholder="${esc(x.ph || "")}">${hint}</div>`;
+    };
+    modalRoot.innerHTML = `<div class="modal-bg" data-close><div class="modal" style="max-width:640px">
+      <h3 style="margin-top:0">${esc(title)}</h3>
+      <form id="itemForm" novalidate>
+        ${extraHtml}
+        <div class="grid-2 form-2">${fields.map(f).join("")}</div>
+        <div class="err small hidden" id="ffErr" style="color:var(--danger);margin-bottom:10px"></div>
+        <div class="row"><button class="btn btn-primary" id="ffSave">Simpan</button><button type="button" class="btn btn-ghost" data-close>Batal</button></div>
+      </form></div></div>`;
+    document.getElementById("itemForm").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const out = {};
+      fields.forEach((x) => {
+        if (x.type === "checks") out[x.k] = [...modalRoot.querySelectorAll(`[data-ffcheck="${x.k}"]:checked`)].map((c) => c.value);
+        else if (x.type === "checkbox") out[x.k] = document.getElementById("ff-" + x.k).checked;
+        else { const el = document.getElementById("ff-" + x.k); out[x.k] = x.type === "number" ? (el.value === "" ? null : Number(el.value)) : el.value.trim(); }
+      });
+      const miss = fields.filter((x) => x.req && (out[x.k] === null || out[x.k] === "" || (Array.isArray(out[x.k]) && !out[x.k].length)));
+      const errEl = document.getElementById("ffErr");
+      const showErr = (m) => { errEl.textContent = m; errEl.classList.remove("hidden"); };
+      if (miss.length) return showErr("Wajib diisi: " + miss.map((x) => x.label.replace(/<[^>]+>/g, "").replace(/\s*\(.*$/, "")).join(", "));
+      const btn = document.getElementById("ffSave");
+      btn.disabled = true; btn.textContent = "Menyimpan…";
+      try {
+        const err = await onSave(out);
+        if (err) { btn.disabled = false; btn.textContent = "Simpan"; return showErr(err); }
+        modalRoot.innerHTML = ""; render();
+      } catch (er) { btn.disabled = false; btn.textContent = "Simpan"; showErr(er.message); }
+    });
+  }
+
+  const splitList = (s) => String(s || "").split(/[,;\n]/).map((x) => x.trim()).filter(Boolean);
+  const unitOpts = [["ml", "ml"], ["g", "g"]];
+
+  function editBase(id) {
+    const b = id ? IDX.bases[id] : null;
+    const p = (id && A.prices.bases[id]) || {};
+    const vals = b ? { ...b, actives: (b.actives || []).join(", "), variants: (b.variants || []).map((v) => v.name + (v.actives && v.actives.length ? ": " + v.actives.join(", ") : "")).join("\n"),
+      price: p.price, priceAwal: p.priceAwal, vol: p.vol ?? b.vol, unit: p.unit || b.unit, shopee: p.shopee || "" } : { cat: "face", unit: "ml" };
+    formModal(b ? `Edit base · ${b.id}` : "Tambah base baru", [
+      { k: "name", label: "Nama base", req: true, ph: "Contoh: Brightening Face Serum" },
+      { k: "cat", label: "Kategori", type: "select", opts: C.baseCategories.map((c) => [c.id, c.name]) },
+      { k: "form", label: "Bentuk sediaan", ph: "Serum / Toner / Cream / Body Wash…" },
+      { k: "aroma", label: "Aroma", ph: "Tanpa parfum / Floral…" },
+      { k: "vol", label: "Volume asli (sesuai harga)", type: "number", req: true },
+      { k: "unit", label: "Satuan", type: "select", opts: unitOpts },
+      { k: "price", label: "Harga diskon (Rp) untuk volume asli", type: "number", req: true, hint: "Harga per pcs = harga ÷ volume asli × volume pesanan" },
+      { k: "priceAwal", label: "Harga awal (Rp, opsional)", type: "number" },
+      { k: "desc", label: "Deskripsi untuk customer", type: "textarea" },
+      { k: "actives", label: "Sudah mengandung (pisahkan koma)", type: "textarea", ph: "Niacinamide, Panthenol, Aloe Vera" },
+      { k: "variants", label: "Varian (opsional, satu per baris)", type: "textarea", ph: "Brightening\nCalming: Centella, Mugwort", hint: "Format: Nama varian atau Nama varian: bahan aktif tambahan varian" },
+      { k: "shopee", label: "Kode / catatan supplier (opsional, hanya admin)" },
+    ], vals, (v) => {
+      if (!(v.vol > 0)) return "Volume asli harus lebih dari 0";
+      const nid = id || nextId("B", C.bases);
+      const variants = v.variants.split("\n").map((x) => x.trim()).filter(Boolean).map((line) => {
+        const i = line.indexOf(":");
+        const name = (i >= 0 ? line.slice(0, i) : line).trim();
+        const a = i >= 0 ? splitList(line.slice(i + 1)) : [];
+        return a.length ? { name, actives: a } : { name };
+      });
+      const item = { id: nid, name: v.name, cat: v.cat, form: v.form, unit: v.unit, vol: v.vol, desc: v.desc, actives: splitList(v.actives) };
+      if (variants.length) item.variants = variants;
+      if (v.aroma) item.aroma = v.aroma;
+      A.prices.bases[nid] = { ...(A.prices.bases[nid] || {}), price: v.price, priceAwal: v.priceAwal ?? v.price, vol: v.vol, unit: v.unit, shopee: v.shopee };
+      putItem("bases", item); savePrices();
+      toast(id ? "Base diperbarui ✓" : `Base ${nid} ditambahkan ✓`);
+    });
+  }
+
+  function editActive(id) {
+    const a = id ? IDX.actives[id] : null;
+    const p = (id && A.prices.actives[id]) || {};
+    const vals = a ? { name: a.name, cats: a.cats, pricekg: p.pricePerGram != null ? Math.round(p.pricePerGram * 1000) : null,
+      kode: (p.source || {}).kode, supplier: (p.source || {}).supplier } : { cats: [] };
+    formModal(a ? `Edit bahan aktif · ${a.id}` : "Tambah bahan aktif baru", [
+      { k: "name", label: "Nama bahan aktif", req: true, ph: "Contoh: Alpha Arbutin" },
+      { k: "pricekg", label: "Harga per kg (Rp)", type: "number", req: true, hint: "Per pcs = harga/gram × (volume × dosis%) × scrap factor" },
+      { k: "kode", label: "Kode bahan (opsional)" },
+      { k: "supplier", label: "Supplier (opsional)" },
+      { k: "cats", label: "Kategori manfaat (bisa lebih dari satu)", type: "checks", req: true, opts: C.activeCategories.map((c) => [c.id, c.name]) },
+    ], vals, (v) => {
+      const nid = id || nextId("A", C.actives);
+      const ppg = v.pricekg / 1000;
+      const old = A.prices.actives[nid];
+      const src = { kode: v.kode || "MANUAL", nama: v.name, supplier: v.supplier || "", pricePerGram: ppg };
+      if (old && old.source && old.source.kode === src.kode) {
+        // Sumber sama → perbarui harga & data sumber yang dipilih
+        const alts = (old.alternatives || []).map((x) => (x.kode === src.kode ? { ...x, ...src } : x));
+        A.prices.actives[nid] = { ...old, pricePerGram: ppg, source: { ...old.source, ...src }, alternatives: alts };
+      } else {
+        const alts = [...((old && old.alternatives) || []).filter((x) => x.kode !== src.kode), src];
+        A.prices.actives[nid] = { ...(old || {}), pricePerGram: ppg, source: src, alternatives: alts };
+      }
+      putItem("actives", { id: nid, name: v.name, cats: v.cats }); savePrices();
+      toast(id ? "Bahan aktif diperbarui ✓" : `Bahan aktif ${nid} ditambahkan ✓`);
+    });
+  }
+
+  // Perkecil foto sebelum upload (maks 800 px, JPEG)
+  function resizeImage(file) {
+    return new Promise((res, rej) => {
+      const img = new Image();
+      img.onload = () => {
+        const k = Math.min(1, 800 / Math.max(img.width, img.height));
+        const cv = document.createElement("canvas");
+        cv.width = Math.round(img.width * k); cv.height = Math.round(img.height * k);
+        const cx = cv.getContext("2d"); cx.fillStyle = "#fff"; cx.fillRect(0, 0, cv.width, cv.height);
+        cx.drawImage(img, 0, 0, cv.width, cv.height);
+        URL.revokeObjectURL(img.src);
+        res(cv.toDataURL("image/jpeg", 0.85));
+      };
+      img.onerror = () => rej(new Error("File gambar tidak bisa dibaca"));
+      img.src = URL.createObjectURL(file);
+    });
+  }
+
+  function editPack(id) {
+    const p = id ? IDX.packaging[id] : null;
+    const pp = (id && A.prices.packaging[id]) || {};
+    const vals = p ? { ...p, vol: p.vol ?? null, filePrice: pp.filePrice ?? null, img: p.img || "" } : { type: "botol", unit: "ml", new: true };
+    let upload = null;
+    const imgBox = `<div class="field"><label>Foto kemasan</label>
+      <div class="row" style="align-items:center;flex-wrap:nowrap">
+        <img id="ffPreview" class="thumb" style="width:84px;height:84px" src="${esc(vals.img || "assets/img/logo-sm.png")}" alt="">
+        <div style="flex:1"><label class="btn btn-ghost btn-sm">Pilih foto…<input type="file" accept="image/*" id="ffFile" hidden></label>
+        <div class="hint">Foto disimpan ke Google Drive (folder "MaklonGo - foto kemasan"). Atau isi URL gambar di bawah.</div></div>
+      </div></div>`;
+    formModal(p ? `Edit kemasan · ${p.code}` : "Tambah kemasan baru", [
+      { k: "code", label: "Kode kemasan", req: true, ph: "Contoh: MP0200" },
+      { k: "name", label: "Nama kemasan", req: true, ph: "Botol Pump Amber" },
+      { k: "type", label: "Jenis", type: "select", opts: C.packagingTypes.map((t) => [t.id, t.name]) },
+      { k: "variasi", label: "Variasi / warna", ph: "Tutup hitam, doff…" },
+      { k: "vol", label: "Volume", type: "number", hint: "Kosongkan untuk aksesoris (tutup, pump). Customer hanya bisa memilih kemasan yang volumenya sama dengan volume produk." },
+      { k: "unit", label: "Satuan", type: "select", opts: unitOpts },
+      { k: "volLabel", label: "Label volume (opsional)", ph: "Contoh: 8-10" },
+      { k: "filePrice", label: "Harga supplier / diskon (Rp)", type: "number", req: true, hint: `Harga jual otomatis = harga supplier × ${A.prices.settings.packagingMarkup}` },
+      { k: "img", label: "URL gambar (opsional)", ph: "https://…" },
+      { k: "new", label: "Tandai sebagai kemasan baru", type: "checkbox", hint: "Muncul di filter ✨ Katalog baru" },
+    ], vals, async (v) => {
+      const code = v.code.toUpperCase();
+      if (C.packaging.some((x) => x.code.toUpperCase() === code && x.id !== id)) return `Kode ${code} sudah dipakai`;
+      if (v.vol !== null && !(v.vol > 0)) return "Volume harus lebih dari 0 (atau kosongkan untuk aksesoris)";
+      let img = v.img;
+      if (upload) {
+        const { endpoint, key } = sheetCfg();
+        if (!endpoint || !key) return "Upload foto butuh koneksi Google Drive (Pengaturan → Google Drive). Atau isi URL gambar.";
+        const d = await post({ action: "uploadImage", name: `${code}.jpg`, dataUrl: upload });
+        img = d.url;
+      }
+      let nid = id || code;
+      if (!id) { let k = 2; while (IDX.packaging[nid]) nid = `${code}-${k++}`; }
+      const item = { ...(p || {}), id: nid, code, name: v.name, variasi: v.variasi || "-", vol: v.vol, unit: v.vol ? v.unit : null, type: v.type, img: img || "" };
+      if (v.volLabel) item.volLabel = v.volLabel; else delete item.volLabel;
+      if (v.new) item.new = true; else delete item.new;
+      delete item.deleted;
+      A.prices.packaging[nid] = { ...(A.prices.packaging[nid] || {}), filePrice: v.filePrice, price: Math.round(v.filePrice * A.prices.settings.packagingMarkup) };
+      putItem("packaging", item); savePrices();
+      toast(id ? "Kemasan diperbarui ✓" : `Kemasan ${code} ditambahkan ✓`);
+    }, imgBox);
+    document.getElementById("ffFile").addEventListener("change", async (e) => {
+      const f = e.target.files[0];
+      if (!f) return;
+      try { upload = await resizeImage(f); document.getElementById("ffPreview").src = upload; } catch (er) { toast(er.message); }
+    });
   }
 
   async function pushPrices() {
@@ -143,7 +396,7 @@
   function syncStatusHtml() {
     const t = (iso) => { try { return new Date(iso).toLocaleString("id-ID", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }); } catch { return ""; } };
     switch (A.sync.state) {
-      case "ok": return `<span class="small muted">☁ Harga & pengaturan tersimpan otomatis ke Google Drive${A.sync.at ? " · " + t(A.sync.at) : ""}</span>`;
+      case "ok": return `<span class="small muted">☁ Harga, katalog & pengaturan tersimpan otomatis ke Google Drive${A.sync.at ? " · " + t(A.sync.at) : ""}</span>`;
       case "saving": return `<span class="small muted">☁ Menyimpan…</span>`;
       case "error": return `<div class="notice" style="background:var(--danger-soft);border-color:#f6cdb8;color:var(--danger)">Gagal menyimpan otomatis: ${esc(A.sync.msg)}.
         <button class="link-btn" data-act="retrySync">Coba lagi</button> · cek URL & ADMIN_KEY di tab Pengaturan.</div>`;
@@ -633,59 +886,69 @@
   }
 
   /* ------------------------------------------------------------ prices tabs */
-  function priceSearch(ph) {
-    return `<div class="row" style="margin-bottom:10px"><input class="input" id="priceQ" placeholder="${ph}" value="${esc(A.priceQ)}" style="max-width:420px"></div>`;
+  function priceSearch(ph, sec) {
+    return `<div class="row between" style="margin-bottom:10px"><input class="input" id="priceQ" placeholder="${ph}" value="${esc(A.priceQ)}" style="max-width:420px;flex:1;min-width:200px">
+      <button class="btn btn-primary btn-sm" data-additem="${sec}">+ Tambah ${SEC_NAME[sec]}</button></div>`;
   }
+  // Item yang dihapus ditaruh paling bawah
+  const liveFirst = (list) => [...list.filter((x) => !x.deleted), ...list.filter((x) => x.deleted)];
 
   function viewBases() {
     const q = A.priceQ.toLowerCase();
-    const rows = C.bases.filter((b) => !q || b.name.toLowerCase().includes(q)).map((b) => {
+    const rows = liveFirst(C.bases.filter((b) => !q || `${b.id} ${b.name} ${b.form}`.toLowerCase().includes(q))).map((b) => {
       const p = A.prices.bases[b.id] || {};
       const fp = (A.filePrices.bases[b.id] || {}).price;
-      return `<tr><td>${b.id}</td><td><b>${esc(b.name)}</b><br><span class="small muted">${esc(b.form)} · Shopee ${esc(p.shopee || "")}</span></td>
-        <td class="num">${p.vol} ${p.unit}</td>
-        <td class="num"><input class="inp ${p.price !== fp ? "changed" : ""}" type="number" data-baseprice="${b.id}" value="${p.price}"></td>
-        <td class="num muted">${rupiah(p.priceAwal)}</td>
-        <td class="num">${rupiah(p.price / p.vol)}</td></tr>`;
+      return `<tr class="${b.deleted ? "deleted" : ""}"><td>${b.id}</td><td><b>${esc(b.name)}</b> ${itemTags("bases", b)}<br><span class="small muted">${esc(b.form || "")} · ${esc((IDX.baseCats[b.cat] || {}).name || "")}${p.shopee ? " · " + esc(p.shopee) : ""}</span></td>
+        <td class="num">${p.vol ?? "-"} ${p.unit || ""}</td>
+        <td class="num">${b.deleted ? rupiah(p.price) : `<input class="inp ${fp !== undefined && p.price !== fp ? "changed" : ""}" type="number" data-baseprice="${b.id}" value="${p.price ?? ""}" placeholder="isi">`}</td>
+        <td class="num muted">${p.priceAwal ? rupiah(p.priceAwal) : "-"}</td>
+        <td class="num">${p.price && p.vol ? rupiah(p.price / p.vol) : '<span class="flag">• isi harga</span>'}</td>
+        <td>${itemActions("bases", b)}</td></tr>`;
     }).join("");
-    return `<p class="muted small">Harga base dari file <i>discount_nominate</i> (kolom Harga diskon). Harga per pcs = harga ÷ volume asli × volume pesanan.</p>
-      ${priceSearch("Cari base…")}
-      <div class="table-wrap"><table class="tbl"><thead><tr><th>ID</th><th>Base</th><th class="num">Vol. asli</th><th class="num">Harga</th><th class="num">Harga awal</th><th class="num">Per ml/g</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+    return `<p class="muted small">Harga base dari file <i>discount_nominate</i> (kolom Harga diskon). Harga per pcs = harga ÷ volume asli × volume pesanan. Tambah / edit / hapus langsung di sini — perubahan otomatis tampil di web customer.</p>
+      ${priceSearch("Cari base…", "bases")}
+      <div class="table-wrap"><table class="tbl"><thead><tr><th>ID</th><th>Base</th><th class="num">Vol. asli</th><th class="num">Harga</th><th class="num">Harga awal</th><th class="num">Per ml/g</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`;
   }
 
   function viewActives() {
     const q = A.priceQ.toLowerCase();
     const st = A.prices.settings;
-    const rows = C.actives.filter((a) => !q || a.name.toLowerCase().includes(q)).map((a) => {
-      const p = A.prices.actives[a.id];
+    const rows = liveFirst(C.actives.filter((a) => !q || a.name.toLowerCase().includes(q))).map((a) => {
+      const p = A.prices.actives[a.id] || { pricePerGram: 0, alternatives: [], source: {} };
       const per100 = p.pricePerGram * 100 * (st.activeDosePct / 100) * st.activeScrapFactor;
       const fpp = (A.filePrices.actives[a.id] || {}).pricePerGram;
-      return `<tr><td><b>${esc(a.name)}</b><br><span class="small muted">${a.cats.map((c) => IDX.activeCats[c].name).join(", ")}</span></td>
-        <td><select class="input" style="padding:6px 8px;font-size:12.5px;min-width:200px" data-actsrc="${a.id}">${p.alternatives.map((x, i) => `<option value="${i}" ${x.kode === p.source.kode ? "selected" : ""}>${esc(x.kode)} · ${esc(x.nama)} · ${esc(x.supplier || "-")} · ${rupiah(x.pricePerGram * 1000)}/kg</option>`).join("")}</select></td>
-        <td class="num"><input class="inp ${p.pricePerGram !== fpp ? "changed" : ""}" type="number" data-actprice="${a.id}" value="${Math.round(p.pricePerGram * 1000)}"></td>
-        <td class="num">${rupiah(per100)}</td></tr>`;
+      const alts = p.alternatives || [];
+      return `<tr class="${a.deleted ? "deleted" : ""}"><td><b>${esc(a.name)}</b> ${itemTags("actives", a)}<br><span class="small muted">${a.cats.map((c) => (IDX.activeCats[c] || {}).name || c).join(", ")}</span></td>
+        <td>${alts.length > 1 && !a.deleted ? `<select class="input" style="padding:6px 8px;font-size:12.5px;min-width:200px" data-actsrc="${a.id}">${alts.map((x, i) => `<option value="${i}" ${x.kode === (p.source || {}).kode ? "selected" : ""}>${esc(x.kode)} · ${esc(x.nama)} · ${esc(x.supplier || "-")} · ${rupiah(x.pricePerGram * 1000)}/kg</option>`).join("")}</select>`
+          : `<span class="small">${esc([(p.source || {}).kode, (p.source || {}).supplier].filter(Boolean).join(" · ") || "-")}</span>`}</td>
+        <td class="num">${a.deleted ? rupiah(p.pricePerGram * 1000) : `<input class="inp ${fpp !== undefined && p.pricePerGram !== fpp ? "changed" : ""}" type="number" data-actprice="${a.id}" value="${Math.round(p.pricePerGram * 1000)}">`}</td>
+        <td class="num">${rupiah(per100)}</td>
+        <td>${itemActions("actives", a)}</td></tr>`;
     }).join("");
     return `<p class="muted small">Harga dari <i>master bahan</i>, dihitung per kg (berat = volume). Per pcs = harga/gram × (volume × ${st.activeDosePct}%) × ${st.activeScrapFactor} (scrap factor).</p>
-      ${priceSearch("Cari bahan aktif…")}
-      <div class="table-wrap"><table class="tbl"><thead><tr><th>Bahan aktif</th><th>Sumber harga</th><th class="num">Harga / kg</th><th class="num">Per pcs @100 ml</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+      ${priceSearch("Cari bahan aktif…", "actives")}
+      <div class="table-wrap"><table class="tbl"><thead><tr><th>Bahan aktif</th><th>Sumber harga</th><th class="num">Harga / kg</th><th class="num">Per pcs @100 ml</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`;
   }
 
   function viewPackaging() {
     const q = A.priceQ.toLowerCase();
     const st = A.prices.settings;
-    const list = C.packaging.filter((p) => !q || `${p.code} ${p.name} ${p.variasi} ${p.vol}`.toLowerCase().includes(q) ||
-      (q === "cek" && (!A.prices.packaging[p.id].filePrice || A.prices.packaging[p.id].filePrice > 100000)));
+    const pp = (id) => A.prices.packaging[id] || {};
+    const list = liveFirst(C.packaging.filter((p) => !q || `${p.code} ${p.name} ${p.variasi} ${p.vol}`.toLowerCase().includes(q) ||
+      (q === "cek" && (!pp(p.id).filePrice || pp(p.id).filePrice > 100000)) ||
+      (q === "baru" && (p.new || !window.MG.isOriginal("packaging", p.id)))));
     const rows = list.slice(0, A.packLimit).map((p) => {
-      const pp = A.prices.packaging[p.id];
-      const flag = !pp.filePrice || pp.filePrice > 100000;
-      return `<tr><td><img class="thumb" loading="lazy" src="${p.img || "assets/img/logo-sm.png"}" alt=""></td><td><b>${esc(p.code)}</b> ${p.new ? '<span class="tag new">Baru</span>' : ""} ${flag ? '<span class="flag">• cek harga</span>' : ""}<br><span class="small">${esc(p.name)}</span><br><span class="small muted">${esc(p.variasi)}</span></td>
+      const pr = pp(p.id);
+      const flag = !pr.filePrice || pr.filePrice > 100000;
+      return `<tr class="${p.deleted ? "deleted" : ""}"><td><img class="thumb" loading="lazy" src="${esc(p.img || "assets/img/logo-sm.png")}" alt=""></td><td><b>${esc(p.code)}</b> ${p.new ? '<span class="tag new">Baru</span>' : ""} ${itemTags("packaging", p)} ${flag && !p.deleted ? '<span class="flag">• cek harga</span>' : ""}<br><span class="small">${esc(p.name)}</span><br><span class="small muted">${esc(p.variasi)}</span></td>
         <td class="num">${p.vol ? (p.volLabel || p.vol) + " " + p.unit : "-"}</td>
-        <td class="num"><input class="inp" type="number" data-packprice="${p.id}" value="${pp.filePrice ?? ""}" placeholder="isi"></td>
-        <td class="num">${pp.price ? rupiah(pp.price) : "-"}${pp.supplierListPrice ? `<br><span class="small muted">Harga normal supplier: ${rupiah(pp.supplierListPrice)}</span>` : ""}</td></tr>`;
+        <td class="num">${p.deleted ? (pr.filePrice ? rupiah(pr.filePrice) : "-") : `<input class="inp" type="number" data-packprice="${p.id}" value="${pr.filePrice ?? ""}" placeholder="isi">`}</td>
+        <td class="num">${pr.price ? rupiah(pr.price) : "-"}${pr.supplierListPrice ? `<br><span class="small muted">Harga normal supplier: ${rupiah(pr.supplierListPrice)}</span>` : ""}</td>
+        <td>${itemActions("packaging", p)}</td></tr>`;
     }).join("");
-    return `<p class="muted small">Harga dari nama file gambar kemasan (kode W…) dan dari Excel katalog baru (kode MP…, kolom "Diskon" = harga diskon supplier) × ${st.packagingMarkup} (${Math.round((st.packagingMarkup - 1) * 100)}%). Ketik <b>cek</b> di pencarian untuk melihat kemasan yang harganya kosong / tidak wajar.</p>
-      ${priceSearch("Cari kode / nama kemasan… (ketik: cek)")}
-      <div class="table-wrap"><table class="tbl"><thead><tr><th></th><th>Kemasan</th><th class="num">Volume</th><th class="num">Harga file</th><th class="num">Harga jual</th></tr></thead><tbody>${rows}</tbody></table></div>
+    return `<p class="muted small">Harga dari nama file gambar kemasan (kode W…) dan dari Excel katalog baru (kode MP…, kolom "Diskon" = harga diskon supplier) × ${st.packagingMarkup} (${Math.round((st.packagingMarkup - 1) * 100)}%). Ketik <b>cek</b> di pencarian untuk melihat kemasan yang harganya kosong / tidak wajar, atau <b>baru</b> untuk kemasan baru.</p>
+      ${priceSearch("Cari kode / nama kemasan… (ketik: cek / baru)", "packaging")}
+      <div class="table-wrap"><table class="tbl"><thead><tr><th></th><th>Kemasan</th><th class="num">Volume</th><th class="num">Harga supplier</th><th class="num">Harga jual</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>
       ${list.length > A.packLimit ? `<button class="btn btn-ghost load-more" data-act="morepack">Tampilkan lebih banyak (${list.length - A.packLimit})</button>` : ""}`;
   }
 
@@ -770,12 +1033,17 @@
   document.getElementById("btnLogout").addEventListener("click", logout);
 
   document.addEventListener("click", async (e) => {
-    const t = e.target.closest("[data-tab],[data-open],[data-close],[data-act],[data-pdf],[data-sendwa],[data-copy],[data-delorder],[data-resetadj]");
+    const t = e.target.closest("[data-tab],[data-open],[data-close],[data-act],[data-pdf],[data-sendwa],[data-copy],[data-delorder],[data-resetadj],[data-additem],[data-edititem],[data-delitem],[data-restore]");
     if (!t) return;
     const ds = t.dataset;
     if (ds.close !== undefined) { if (e.target === t || t.tagName === "BUTTON") closeOrder(); return; }
     if (ds.tab) { A.tab = ds.tab; A.priceQ = ""; A.packLimit = 60; return render(); }
     if (ds.open) return openOrder(ds.open);
+    const EDIT = { bases: editBase, actives: editActive, packaging: editPack };
+    if (ds.additem) return EDIT[ds.additem]();
+    if (ds.edititem) { const [sec, id] = ds.edititem.split(/:(.*)/); return EDIT[sec](id); }
+    if (ds.delitem) { const [sec, id] = ds.delitem.split(/:(.*)/); return deleteItem(sec, id); }
+    if (ds.restore) { const [sec, id] = ds.restore.split(/:(.*)/); return restoreItem(sec, id); }
     if (ds.pdf) { const o = getOrders().find((x) => x.id === ds.pdf); buildInvoice(o).save(`Invoice-${o.id}.pdf`); return; }
     if (ds.sendwa) return sendInvoiceWa(getOrders().find((x) => x.id === ds.sendwa));
     if (ds.copy) { const o = getOrders().find((x) => x.id === ds.copy); await navigator.clipboard.writeText(orderSummaryText(o)); return toast("Ringkasan disalin"); }
@@ -793,7 +1061,7 @@
       case "retrySync": return pushPrices();
       case "saveSheet": {
         store.set("mg_sheet", { endpoint: document.getElementById("sheetEndpoint").value.trim(), key: document.getElementById("sheetKey").value });
-        await loadRemotePrices();
+        await Promise.all([loadRemotePrices(), loadCatalog()]);
         render();
         return toast(A.sync.state === "ok" ? "Terhubung ✓ — perubahan kini tersimpan otomatis" : "Gagal terhubung: " + (A.sync.msg || ""), 4000);
       }
@@ -810,6 +1078,7 @@
 
   document.addEventListener("change", (e) => {
     const t = e.target, ds = t.dataset;
+    if (ds.ffcheck) { t.closest(".chip").classList.toggle("active", t.checked); return; }
     if (t.id === "ordStatus") { updateOrder(A.openId, (o) => { o.status = t.value; }); return; }
     if (ds.adj !== undefined) {
       const i = +ds.adj, k = ds.key, v = t.value === "" ? undefined : Number(t.value);
@@ -821,11 +1090,11 @@
       return openOrder(A.openId);
     }
     if (ds.orderadj) { updateOrder(A.openId, (o) => { o.adj[ds.orderadj] = Number(t.value) || 0; }); return openOrder(A.openId); }
-    if (ds.baseprice) { A.prices.bases[ds.baseprice].price = Number(t.value) || 0; savePrices(); return render(); }
-    if (ds.actprice) { A.prices.actives[ds.actprice].pricePerGram = (Number(t.value) || 0) / 1000; savePrices(); return render(); }
+    if (ds.baseprice) { (A.prices.bases[ds.baseprice] = A.prices.bases[ds.baseprice] || { vol: IDX.bases[ds.baseprice].vol, unit: IDX.bases[ds.baseprice].unit }).price = Number(t.value) || 0; savePrices(); return render(); }
+    if (ds.actprice) { (A.prices.actives[ds.actprice] = A.prices.actives[ds.actprice] || { alternatives: [], source: {} }).pricePerGram = (Number(t.value) || 0) / 1000; savePrices(); return render(); }
     if (ds.actsrc) { const p = A.prices.actives[ds.actsrc]; p.source = p.alternatives[+t.value]; p.pricePerGram = p.source.pricePerGram; savePrices(); return render(); }
     if (ds.packprice) {
-      const p = A.prices.packaging[ds.packprice];
+      const p = (A.prices.packaging[ds.packprice] = A.prices.packaging[ds.packprice] || {});
       p.filePrice = t.value === "" ? null : Number(t.value);
       p.price = p.filePrice ? Math.round(p.filePrice * A.prices.settings.packagingMarkup) : null;
       savePrices(); return render();
