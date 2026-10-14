@@ -62,6 +62,19 @@ Edit [`assets/js/config.js`](assets/js/config.js):
 - `fees` — biaya BPOM/Halal yang tampil di web customer
 - `orderEndpoint` — URL Google Apps Script (opsional)
 
+## Penyimpanan otomatis (tanpa upload file)
+
+Setelah dashboard terhubung ke Google Apps Script (Pengaturan → Google Drive), **setiap perubahan harga, pengaturan, status & penyesuaian order tersimpan otomatis** ke Google Drive / tab *Invoice* dan langsung terbaca di semua perangkat. `data/prices.enc.json` hanya dipakai sebagai data awal & untuk login (password).
+
+## Deploy ke hosting sendiri (Niagahoster)
+
+Web app ini 100% file statis — tidak perlu PHP/MySQL.
+1. hPanel → **File Manager** → buka `public_html` (atau folder subdomain).
+2. Upload `maklongo-hosting.zip` (berisi `index.html`, `admin.html`, `.htaccess`, `assets/`, `data/`) → **Extract**.
+3. Buka `https://domain-anda/` dan `https://domain-anda/admin.html`.
+
+Atau otomatis: isi secret GitHub `FTP_SERVER`, `FTP_USERNAME`, `FTP_PASSWORD` (opsional `FTP_DIR`, default `./public_html/`) → setiap push ke `main` di-upload otomatis oleh workflow `.github/workflows/deploy-hosting.yml`.
+
 ## Preview di GitHub Pages
 
 Preview: **https://maskit-store.github.io/maklonmoq50pcs/** (admin: `/admin.html`).

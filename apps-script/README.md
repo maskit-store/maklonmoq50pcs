@@ -41,6 +41,9 @@ Harga tidak pernah dikirim ke browser customer: script membaca harga dari file p
    **Sinkron harga ke Google Drive**. Ulangi klik "Sinkron harga" setiap kali harga / pengaturan invoice diubah.
 8. (Opsional) Pilih fungsi `testInvoice` → **Run** untuk membuat PDF contoh di folder invoice.
 
+**Tips:** buat `ADMIN_KEY` sama dengan password dashboard admin. Dengan begitu dashboard di perangkat mana pun
+langsung tersambung setelah login, tanpa mengisi kunci lagi.
+
 Jika `Code.gs` diperbarui: tempel ulang → **Deploy → Manage deployments → Edit (pensil) → Version: New version → Deploy**
 (URL tetap sama).
 

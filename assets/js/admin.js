@@ -18,7 +18,7 @@
 
   const root = document.getElementById("admin");
   const modalRoot = document.getElementById("modalRoot");
-  const A = { pw: null, prices: null, filePrices: null, dirty: false, tab: "orders", q: "", status: "all", priceQ: "", openId: null, packLimit: 60 };
+  const A = { pw: null, prices: null, filePrices: null, dirty: false, sync: { state: "off" }, tab: "orders", q: "", status: "all", priceQ: "", openId: null, packLimit: 60 };
 
   // Logo untuk PDF (dimuat sekali sebagai data URL)
   let LOGO = null;
@@ -27,7 +27,8 @@
 
   const getOrders = () => store.get("mg_orders", []);
   const setOrders = (o) => store.set("mg_orders", o);
-  const sheetCfg = () => store.get("mg_sheet", { endpoint: CFG.orderEndpoint || "", key: "" });
+  // Kunci admin Apps Script: yang disimpan di perangkat ini, atau password dashboard (jika ADMIN_KEY dibuat sama)
+  const sheetCfg = () => { const s = store.get("mg_sheet", {}); return { endpoint: s.endpoint || CFG.orderEndpoint || "", key: s.key || A.pw || "" }; };
 
   /* ------------------------------------------------------------ login */
   function viewLogin(err) {
@@ -61,9 +62,89 @@
     A.prices.settings = { ...DEFAULT_SETTINGS, ...A.prices.settings };
     try { sessionStorage.setItem("mg_pw", pw); } catch {}
     document.getElementById("btnLogout").classList.remove("hidden");
+    await loadRemotePrices();
     handleImportHash();
     render();
+    if (A.sync.state === "ok") syncSheet(true);
   }
+
+  /* ------------------------------------------------------------ penyimpanan otomatis (Google Apps Script) */
+  // Gabungkan harga dari Drive (terbaru) ke data file: item baru di file tetap ada, nilai dari Drive menang.
+  function mergePrices(file, remote) {
+    const out = structuredClone(file);
+    ["bases", "actives", "packaging"].forEach((sec) => {
+      Object.entries((remote && remote[sec]) || {}).forEach(([k, v]) => { if (out[sec][k]) out[sec][k] = { ...out[sec][k], ...v }; });
+    });
+    out.settings = { ...DEFAULT_SETTINGS, ...file.settings, ...((remote && remote.settings) || {}) };
+    return out;
+  }
+
+  async function loadRemotePrices() {
+    const { endpoint, key } = sheetCfg();
+    if (!endpoint || !key) { A.sync = { state: "off" }; return; }
+    try {
+      const res = await fetch(`${endpoint}?action=prices&key=${encodeURIComponent(key)}`);
+      const data = await res.json();
+      if (data.error) throw new Error(data.error === "unauthorized" ? "ADMIN_KEY salah / belum diisi" : data.error);
+      if (data.prices) {
+        A.prices = mergePrices(A.filePrices, data.prices);
+        store.set("mg_admin_prices", A.prices);
+        A.dirty = false;
+      } else {
+        await pushPrices(); // belum pernah disimpan di Drive → simpan sekarang
+      }
+      A.sync = { state: "ok", at: data.savedAt || new Date().toISOString() };
+    } catch (e) {
+      A.sync = { state: "error", msg: e.message };
+    }
+  }
+
+  async function post(body) {
+    const { endpoint, key } = sheetCfg();
+    const res = await fetch(endpoint, { method: "POST", headers: { "Content-Type": "text/plain" }, body: JSON.stringify({ ...body, key }) });
+    const data = await res.json();
+    if (data.error) throw new Error(data.error === "unauthorized" ? "ADMIN_KEY salah / belum diisi" : data.error);
+    return data;
+  }
+
+  async function pushPrices() {
+    const { endpoint, key } = sheetCfg();
+    if (!endpoint || !key) { A.sync = { state: "off" }; return renderSync(); }
+    A.sync = { state: "saving" }; renderSync();
+    try {
+      const d = await post({ action: "syncPrices", prices: A.prices });
+      A.dirty = false;
+      A.sync = { state: "ok", at: d.synced };
+    } catch (e) { A.sync = { state: "error", msg: e.message }; }
+    renderSync();
+  }
+
+  let pricesTimer;
+  function schedulePushPrices() { clearTimeout(pricesTimer); pricesTimer = setTimeout(pushPrices, 800); }
+
+  const orderTimers = {};
+  function schedulePushOrder(id) {
+    clearTimeout(orderTimers[id]);
+    orderTimers[id] = setTimeout(async () => {
+      const { endpoint, key } = sheetCfg();
+      const o = getOrders().find((x) => x.id === id);
+      if (!o || !endpoint || !key) return;
+      try { await post({ action: "saveOrder", id, adj: o.adj || {}, status: o.status, updatedAt: o.updatedAt }); }
+      catch (e) { if (!/not found/.test(e.message)) toast("Perubahan order belum tersimpan ke Google Sheet: " + e.message, 4000); }
+    }, 900);
+  }
+
+  function syncStatusHtml() {
+    const t = (iso) => { try { return new Date(iso).toLocaleString("id-ID", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }); } catch { return ""; } };
+    switch (A.sync.state) {
+      case "ok": return `<span class="small muted">☁ Harga & pengaturan tersimpan otomatis ke Google Drive${A.sync.at ? " · " + t(A.sync.at) : ""}</span>`;
+      case "saving": return `<span class="small muted">☁ Menyimpan…</span>`;
+      case "error": return `<div class="notice" style="background:var(--danger-soft);border-color:#f6cdb8;color:var(--danger)">Gagal menyimpan otomatis: ${esc(A.sync.msg)}.
+        <button class="link-btn" data-act="retrySync">Coba lagi</button> · cek URL & ADMIN_KEY di tab Pengaturan.</div>`;
+      default: return A.dirty ? `<div class="notice">Perubahan baru tersimpan di browser ini. Isi URL & ADMIN_KEY di <b>Pengaturan → Google Drive</b> agar tersimpan otomatis untuk semua perangkat.</div>` : "";
+    }
+  }
+  function renderSync() { const el = document.getElementById("syncStatus"); if (el) el.innerHTML = syncStatusHtml(); }
 
   function logout() {
     try { sessionStorage.removeItem("mg_pw"); } catch {}
@@ -106,37 +187,41 @@
     render();
   }
 
-  async function syncSheet() {
+  async function syncSheet(silent) {
     const { endpoint, key } = sheetCfg();
     if (!endpoint) return toast("Isi URL Google Apps Script di tab Pengaturan");
     try {
       const res = await fetch(`${endpoint}?key=${encodeURIComponent(key)}`);
       const data = await res.json();
       if (data.error) throw new Error(data.error);
-      const list = (data.orders || []).map((r) => { try { const o = r.packed ? window.MG.unpackOrder(r.packed) : r.order; if (o && r.pdf) o.pdfUrl = r.pdf; return o; } catch { return null; } });
-      upsertOrders(list);
-      // simpan link PDF untuk order yang sudah ada
-      const pdf = Object.fromEntries((data.orders || []).filter((r) => r.pdf && r.order).map((r) => [r.order.id, r.pdf]));
-      setOrders(getOrders().map((o) => (pdf[o.id] && !o.pdfUrl ? { ...o, pdfUrl: pdf[o.id] } : o)));
+      const remote = (data.orders || []).map((r) => { try { const o = r.order || window.MG.unpackOrder(r.packed); if (o && r.pdf) o.pdfUrl = r.pdf; return o; } catch { return null; } }).filter(Boolean);
+      const added = upsertOrders(remote, true);
+      // Order yang sudah ada: ambil link PDF, status & penyesuaian harga terbaru dari Sheet
+      const byId = Object.fromEntries(remote.map((o) => [o.id, o]));
+      setOrders(getOrders().map((o) => {
+        const r = byId[o.id];
+        if (!r) return o;
+        const n = { ...o, pdfUrl: o.pdfUrl || r.pdfUrl };
+        if (r.updatedAt && (!o.updatedAt || r.updatedAt > o.updatedAt)) Object.assign(n, { adj: r.adj || {}, status: r.status || o.status, updatedAt: r.updatedAt });
+        return n;
+      }));
+      if (!silent) toast(added ? `${added} order baru dari Google Sheet` : "Data order sudah terbaru");
       render();
-    } catch (e) { toast("Gagal sinkron: " + e.message); }
+    } catch (e) { if (!silent) toast("Gagal sinkron: " + e.message); }
   }
 
   async function syncPricesToDrive() {
     const { endpoint, key } = sheetCfg();
     if (!endpoint || !key) return toast("Isi URL Apps Script & ADMIN_KEY lalu klik Simpan dulu");
-    try {
-      const res = await fetch(endpoint, { method: "POST", headers: { "Content-Type": "text/plain" }, body: JSON.stringify({ action: "syncPrices", key, prices: A.prices }) });
-      const data = await res.json();
-      if (data.error) throw new Error(data.error);
-      toast("Harga & pengaturan tersinkron ke Google Drive ✓");
-    } catch (e) { toast("Gagal sinkron: " + e.message, 4500); }
+    await pushPrices();
+    toast(A.sync.state === "ok" ? "Harga & pengaturan tersimpan ke Google Drive ✓" : "Gagal: " + (A.sync.msg || ""), 4000);
   }
 
   /* ------------------------------------------------------------ prices store */
   function savePrices() {
     A.dirty = true;
     store.set("mg_admin_prices", A.prices);
+    schedulePushPrices();
   }
 
   async function exportEncrypted(pw) {
@@ -157,9 +242,7 @@
     if (!A.prices) return viewLogin();
     const tabs = [["orders", "Pesanan"], ["bases", "Harga Base"], ["actives", "Bahan Aktif"], ["packaging", "Kemasan"], ["settings", "Pengaturan"]];
     root.innerHTML = `
-      ${A.dirty ? `<div class="notice" style="margin-top:12px">Ada perubahan harga/pengaturan yang tersimpan di browser ini saja.
-        <button class="link-btn" data-act="export">Download prices.enc.json</button> lalu upload ke folder <code>data/</code> di GitHub agar berlaku di perangkat lain.
-        <button class="link-btn" data-act="resetLocal" style="color:var(--danger)">Buang perubahan</button></div>` : ""}
+      <div id="syncStatus" style="margin-top:10px">${syncStatusHtml()}</div>
       <div class="tabs">${tabs.map(([id, n]) => `<button class="tab ${A.tab === id ? "active" : ""}" data-tab="${id}">${n}</button>`).join("")}</div>
       <div id="tabBody">${({ orders: viewOrders, bases: viewBases, actives: viewActives, packaging: viewPackaging, settings: viewSettings })[A.tab]()}</div>`;
     if (A.openId) openOrder(A.openId);
@@ -291,7 +374,9 @@
     if (!o) return;
     o.adj = o.adj || {};
     fn(o);
+    o.updatedAt = new Date().toISOString();
     setOrders(orders);
+    schedulePushOrder(id);
   }
 
   function orderSummaryText(o) {
@@ -600,7 +685,7 @@
 
   function viewSettings() {
     const s = A.prices.settings;
-    const sh = sheetCfg();
+    const sh = { endpoint: sheetCfg().endpoint, key: store.get("mg_sheet", {}).key || "" };
     const n = (k, label, hint = "") => `<div class="field"><label>${label}</label><input type="number" step="any" data-set="${k}" value="${s[k]}">${hint ? `<div class="hint">${hint}</div>` : ""}</div>`;
     const t = (k, label, area) => `<div class="field"><label>${label}</label>${area ? `<textarea data-set="${k}">${esc(s[k])}</textarea>` : `<input data-set="${k}" value="${esc(s[k])}">`}</div>`;
     return `<div class="grid-2" style="gap:14px">
@@ -631,13 +716,14 @@
       <div class="card"><h3 style="margin-top:0">Google Drive: invoice otomatis & rekap order</h3>
         <p class="small muted">Setiap order otomatis dibuatkan invoice PDF di folder Drive "Invoice Generated" dan dicatat di Google Sheet. Panduan pemasangan: <code>apps-script/README.md</code>.</p>
         <div class="field"><label>URL Web App Apps Script</label><input id="sheetEndpoint" value="${esc(sh.endpoint)}" placeholder="https://script.google.com/macros/s/…/exec"></div>
-        <div class="field"><label>Kunci admin (ADMIN_KEY)</label><input id="sheetKey" type="password" value="${esc(sh.key)}"></div>
+        <div class="field"><label>Kunci admin (ADMIN_KEY)</label><input id="sheetKey" type="password" value="${esc(sh.key)}" placeholder="kosongkan jika ADMIN_KEY = password dashboard">
+          <div class="hint">Tips: buat ADMIN_KEY di Apps Script sama dengan password dashboard, maka kolom ini boleh dikosongkan dan semua perangkat langsung tersambung setelah login.</div></div>
         <div class="row"><button class="btn btn-ghost btn-sm" data-act="saveSheet">Simpan</button>
         <button class="btn btn-primary btn-sm" data-act="syncPrices">Sinkron harga ke Google Drive</button></div>
-        <p class="small muted" style="margin-bottom:0">Klik "Sinkron harga" setiap kali harga / pengaturan invoice diubah, agar invoice PDF otomatis di Drive memakai angka terbaru.</p>
+        <p class="small muted" style="margin-bottom:0">Setelah terhubung, setiap perubahan harga, pengaturan, status & penyesuaian order <b>tersimpan otomatis</b> ke Google Drive / Sheet dan langsung dipakai di semua perangkat serta invoice PDF otomatis. Tidak perlu upload file lagi.</p>
       </div>
       <div class="card"><h3 style="margin-top:0">Keamanan & data</h3>
-        <p class="small muted">Harga disimpan terenkripsi di <code>data/prices.enc.json</code>. Setelah mengubah harga / password, download file baru lalu upload ke GitHub (replace file lama).</p>
+        <p class="small muted">Password dashboard membuka file harga awal <code>data/prices.enc.json</code>. Perubahan harga sehari-hari tersimpan otomatis ke Google Drive. Ganti password hanya perlu file baru (download → kirim ke developer / upload ke hosting).</p>
         <div class="field"><label>Password baru</label><input id="newPw" type="password" autocomplete="new-password" placeholder="min. 8 karakter"></div>
         <div class="row">
           <button class="btn btn-ghost btn-sm" data-act="changePw">Ganti password & download</button>
@@ -698,7 +784,13 @@
       case "csv": return exportCsv();
       case "morepack": A.packLimit += 120; return render();
       case "syncPrices": return syncPricesToDrive();
-      case "saveSheet": store.set("mg_sheet", { endpoint: document.getElementById("sheetEndpoint").value.trim(), key: document.getElementById("sheetKey").value }); return toast("Tersimpan");
+      case "retrySync": return pushPrices();
+      case "saveSheet": {
+        store.set("mg_sheet", { endpoint: document.getElementById("sheetEndpoint").value.trim(), key: document.getElementById("sheetKey").value });
+        await loadRemotePrices();
+        render();
+        return toast(A.sync.state === "ok" ? "Terhubung ✓ — perubahan kini tersimpan otomatis" : "Gagal terhubung: " + (A.sync.msg || ""), 4000);
+      }
       case "changePw": {
         const pw = document.getElementById("newPw").value;
         if (pw.length < 8) return toast("Password minimal 8 karakter");

@@ -1,0 +1,21 @@
+# MaklonGo — pengaturan untuk hosting Apache/LiteSpeed (Niagahoster)
+Options -Indexes
+
+# Jangan sajikan file sumber / alat developer
+RedirectMatch 404 ^/?(source|tools|\.github)(/|$)
+
+<IfModule mod_headers.c>
+  # Kode & data selalu dicek ulang agar update langsung terlihat
+  <FilesMatch "\.(html|js|css|json)$">
+    Header set Cache-Control "no-cache"
+  </FilesMatch>
+  # Gambar boleh di-cache 30 hari
+  <FilesMatch "\.(webp|png|jpg|jpeg|svg)$">
+    Header set Cache-Control "public, max-age=2592000"
+  </FilesMatch>
+  Header always set X-Content-Type-Options "nosniff"
+</IfModule>
+
+<IfModule mod_deflate.c>
+  AddOutputFilterByType DEFLATE text/html text/css application/javascript application/json
+</IfModule>

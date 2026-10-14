@@ -1,0 +1,36 @@
+name: Deploy ke hosting (FTP Niagahoster)
+
+# Aktif setelah secret FTP_SERVER, FTP_USERNAME, FTP_PASSWORD (dan opsional FTP_DIR) diisi di
+# Settings → Secrets and variables → Actions. Tanpa secret, job dilewati.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      FTP_SERVER: ${{ secrets.FTP_SERVER }}
+    steps:
+      - name: Cek konfigurasi FTP
+        id: cfg
+        run: echo "enabled=${{ env.FTP_SERVER != '' }}" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+        if: steps.cfg.outputs.enabled == 'true'
+      - name: Upload via FTP
+        if: steps.cfg.outputs.enabled == 'true'
+        uses: SamKirkland/FTP-Deploy-Action@v4.3.5
+        with:
+          server: ${{ secrets.FTP_SERVER }}
+          username: ${{ secrets.FTP_USERNAME }}
+          password: ${{ secrets.FTP_PASSWORD }}
+          server-dir: ${{ secrets.FTP_DIR || './public_html/' }}
+          exclude: |
+            **/.git*
+            **/.git*/**
+            .github/**
+            source/**
+            tools/**
+            apps-script/**
+            README.md

@@ -23,7 +23,8 @@ const TAGLINE = "Early Stage Brand Owner, Starts Here";
 // Kolom tab "Invoice". A–C mengikuti format yang sudah ada (NoOrder, Link, Nama).
 const INVOICE_HEADERS = ["NoOrder", "Link", "Nama", "Waktu Order", "Brand", "No HP", "Email", "Kota", "Jumlah SKU",
   "Total pcs", "Total Invoice (Rp)", "Lihat PDF", "Rincian SKU", "Catatan Brand", "Status", "Packed", "JSON"];
-const COL = { id: 1, link: 2, packed: 16, json: 17, view: 12 };
+const COL = { id: 1, link: 2, status: 15, packed: 16, json: 17, view: 12 };
+const STATUS_NAMES = { baru: "Baru", invoice: "Invoice terkirim", dp: "DP diterima", produksi: "Produksi", selesai: "Selesai", batal: "Batal" };
 
 const DEFAULT_SETTINGS = {
   activeDosePct: 1, activeScrapFactor: 1.35, packagingMarkup: 1.35,
@@ -50,7 +51,35 @@ function doPost(e) {
     if (id) { try { file = DriveApp.getFileById(id); } catch (err) { file = null; } }
     if (file) file.setContent(content);
     else { file = DriveApp.createFile("MaklonGo - harga (RAHASIA).json", content, MimeType.PLAIN_TEXT); props.setProperty("PRICES_FILE_ID", file.getId()); }
-    return json_({ ok: true, synced: new Date().toISOString() });
+    const savedAt = new Date().toISOString();
+    props.setProperty("PRICES_SAVED_AT", savedAt);
+    return json_({ ok: true, synced: savedAt });
+  }
+
+  // Simpan perubahan order dari dashboard (status & penyesuaian harga) agar sama di semua perangkat
+  if (data.action === "saveOrder") {
+    if (!checkKey_(data.key)) return json_({ error: "unauthorized" });
+    const lock = LockService.getScriptLock();
+    lock.waitLock(20000);
+    try {
+      const sh = invoiceSheet_();
+      const last = sh.getLastRow();
+      if (last < 2) return json_({ error: "not found" });
+      const ids = sh.getRange(2, COL.id, last - 1, 1).getValues().flat();
+      const i = ids.indexOf(data.id);
+      if (i < 0) return json_({ error: "not found" });
+      const row = i + 2;
+      const cell = sh.getRange(row, COL.json);
+      const o = JSON.parse(cell.getValue() || "{}");
+      o.adj = data.adj || {};
+      o.status = data.status || o.status;
+      o.updatedAt = data.updatedAt || new Date().toISOString();
+      cell.setValue(JSON.stringify(o));
+      sh.getRange(row, COL.status).setValue(STATUS_NAMES[o.status] || o.status);
+      return json_({ ok: true });
+    } finally {
+      lock.releaseLock();
+    }
   }
 
   const o = data.order;
@@ -84,6 +113,12 @@ function doPost(e) {
 
 function doGet(e) {
   if (!checkKey_(e.parameter.key)) return json_({ error: "unauthorized" });
+  if (e.parameter.action === "prices") {
+    const props = PropertiesService.getScriptProperties();
+    const id = props.getProperty("PRICES_FILE_ID");
+    if (!id) return json_({ prices: null });
+    return json_({ prices: JSON.parse(DriveApp.getFileById(id).getBlob().getDataAsString()), savedAt: props.getProperty("PRICES_SAVED_AT") });
+  }
   const sh = invoiceSheet_();
   const n = sh.getLastRow() - 1;
   if (n < 1) return json_({ orders: [] });
