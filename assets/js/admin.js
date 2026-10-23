@@ -440,7 +440,11 @@
   /* Baca pesan WhatsApp order biasa (tanpa link admin) → data order. Cocokkan nama base / bahan aktif / kode kemasan ke katalog. */
   const BULAN = { jan: 0, feb: 1, mar: 2, apr: 3, mei: 4, may: 4, jun: 5, jul: 6, agu: 7, agt: 7, aug: 7, sep: 8, okt: 9, oct: 9, nov: 10, des: 11, dec: 11 };
   function parseOrderText(txt) {
-    const lines = txt.split(/\r?\n/).map((l) => l.replace(/^[\s*•·\-_]+/, "").replace(/[*_]+$/, "").trim()).filter(Boolean);
+    // Bersihkan karakter tak terlihat dari WhatsApp, lalu pastikan tiap label ada di baris sendiri (jika baris tergabung saat disalin)
+    const LABELS = "No\\. Order|Tanggal|Nama Brand|Catatan Brand|Nama|HP\\/WA|Email|Kota|Catatan kemasan|Catatan|SKU\\s*\\d+|Base|Sudah mengandung|Volume|Bahan aktif tambahan|Request bahan aktif lain|Kemasan|Sticker|Request sample|Total";
+    const clean = txt.replace(/[\u200B-\u200F\u202A-\u202E\u2060-\u2069\uFEFF]/g, "").replace(/\u00A0/g, " ")
+      .replace(new RegExp("([^\\n])\\s*(?:[*•·◦‣▪●\\-–]\\s*)?(?=(?:" + LABELS + ")\\s*(?:\\([^)]*\\))?\\s*:)", "g"), "$1\n");
+    const lines = clean.split(/\r?\n|\r/).map((l) => l.replace(/^[^\p{L}\p{N}]+/u, "").replace(/[*_\s]+$/, "").trim()).filter(Boolean);
     const val = (re) => { const l = lines.find((x) => re.test(x)); return l ? l.replace(re, "").trim() : ""; };
     const id = (txt.match(/MG-\d{6}-[A-Z0-9]{5}/) || [])[0];
     if (!id) return null;
@@ -500,15 +504,17 @@
 
   // Catat order hasil import ke Google Sheet (+ invoice PDF otomatis). Duplikat diabaikan oleh Apps Script.
   async function recordToSheet(o) {
-    const { endpoint } = sheetCfg();
+    const { endpoint, key } = sheetCfg();
     if (!endpoint) return;
     try {
+      // replace: baris & invoice PDF di Sheet diperbarui jika nomor order sudah ada (butuh ADMIN_KEY)
       const res = await fetch(endpoint, { method: "POST", headers: { "Content-Type": "text/plain" },
-        body: JSON.stringify({ order: window.MG.enrichOrder(o), packed: window.MG.packOrder(o) }) });
+        body: JSON.stringify({ order: window.MG.enrichOrder(o), packed: window.MG.packOrder(o), replace: true, key }) });
       const d = await res.json();
       if (d.error) throw new Error(d.error);
-      if (d.pdf && !d.duplicate) { setOrders(getOrders().map((x) => (x.id === o.id ? { ...x, pdfUrl: d.pdf } : x))); if (A.openId === o.id) openOrder(o.id); }
-      toast(d.duplicate ? `${o.id} sudah ada di Google Sheet` : `${o.id} dicatat ke Google Sheet + invoice PDF dibuat ✓`, 3500);
+      if (d.duplicate) return toast(`${o.id} sudah ada di Google Sheet dengan data lama. Perbarui Apps Script (Deploy → New version) lalu import lagi agar baris & PDF ikut diperbarui.`, 7000);
+      if (d.pdf) { setOrders(getOrders().map((x) => (x.id === o.id ? { ...x, pdfUrl: d.pdf } : x))); if (A.openId === o.id) openOrder(o.id); }
+      toast(d.replaced ? `${o.id} diperbarui di Google Sheet + invoice PDF baru dibuat ✓` : `${o.id} dicatat ke Google Sheet + invoice PDF dibuat ✓`, 4000);
     } catch (e) { toast(`${o.id} belum tercatat ke Google Sheet: ${e.message}`, 4500); }
   }
 
@@ -520,7 +526,19 @@
     const parsed = [];
     if (!list.length) String(text).split(/(?=ORDER MAKLON)/i).forEach((chunk) => { const o = parseOrderText(chunk); if (o) parsed.push(o); });
     if (!list.length && !parsed.length) return toast("Tidak ada order yang bisa dibaca. Pastikan menempel seluruh pesan, termasuk No. Order.");
-    upsertOrders([...list, ...parsed]);
+    upsertOrders(list);
+    // Pesan WA: order dengan nomor sama ditimpa (mis. hasil import sebelumnya keliru); status & penyesuaian harga tetap
+    if (parsed.length) {
+      const orders = getOrders();
+      parsed.forEach((o) => {
+        const i = orders.findIndex((x) => x.id === o.id);
+        if (i < 0) orders.unshift({ ...o, status: "baru", adj: {}, importedAt: new Date().toISOString() });
+        else orders[i] = { ...orders[i], customer: o.customer, items: o.items, createdAt: o.createdAt, source: o.source, pdfUrl: undefined, updatedAt: new Date().toISOString() };
+      });
+      orders.sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""));
+      setOrders(orders);
+      toast(`${parsed.length} order dari pesan WA tersimpan`);
+    }
     const bad = parsed.filter((o) => o.items.some((x) => !IDX.bases[x.baseId]));
     if (bad.length) toast("Perhatian: ada base yang tidak dikenali — cek detail order.", 4500);
     render();

@@ -104,7 +104,10 @@ function doPost(e) {
     const sh = invoiceSheet_();
     const last = sh.getLastRow();
     const ids = last > 1 ? sh.getRange(2, COL.id, last - 1, 1).getValues().flat() : [];
-    if (ids.indexOf(o.id) >= 0) return json_({ ok: true, duplicate: true });
+    const existing = ids.indexOf(o.id);
+    // Order dengan nomor sama: abaikan, kecuali admin meminta perbarui (import ulang dari dashboard)
+    const replace = existing >= 0 && data.replace && checkKey_(data.key);
+    if (existing >= 0 && !replace) return json_({ ok: true, duplicate: true });
     let download = "", view = "", total = "";
     try {
       const res = createInvoicePdf_(o);
@@ -117,8 +120,19 @@ function doPost(e) {
     const rincian = o.items.map((x, i) => `SKU${i + 1}: ${x.productName || x.baseName} (${x.baseName}${x.variant ? ", " + x.variant : ""}) ${x.vol}${x.unit || ""} x${x.qty} pcs` +
       ` | aktif: ${(x.activeNames || []).join(", ") || "-"}${x.customActives ? " + request: " + x.customActives : ""}` +
       ` | kemasan: ${x.packagingLabel || "-"} | sample: ${x.sample ? "Ya" : "Tidak"}`).join("\n");
-    sh.appendRow([o.id, download, `${c.name} (${c.brand})`, new Date(o.createdAt), c.brand, "'" + c.phone, c.email, c.city,
-      o.items.length, pcs, total, view, rincian, c.brandNote || "", "Baru", data.packed || "", JSON.stringify(o)]);
+    const row = [o.id, download, `${c.name} (${c.brand})`, new Date(o.createdAt), c.brand, "'" + c.phone, c.email, c.city,
+      o.items.length, pcs, total, view, rincian, c.brandNote || "", "Baru", data.packed || "", JSON.stringify(o)];
+    if (replace) {
+      const r = existing + 2;
+      const old = sh.getRange(r, 1, 1, INVOICE_HEADERS.length).getValues()[0];
+      row[COL.status - 1] = old[COL.status - 1] || "Baru";
+      // Invoice PDF lama dipindah ke sampah
+      const m = String(old[COL.link - 1]).match(/id=([\w-]+)/);
+      if (m) { try { DriveApp.getFileById(m[1]).setTrashed(true); } catch (err) {} }
+      sh.getRange(r, 1, 1, row.length).setValues([row]);
+      return json_({ ok: true, pdf: download, replaced: true });
+    }
+    sh.appendRow(row);
     return json_({ ok: true, pdf: download });
   } finally {
     lock.releaseLock();
