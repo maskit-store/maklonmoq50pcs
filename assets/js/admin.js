@@ -437,13 +437,95 @@
     history.replaceState(null, "", location.pathname);
   }
 
+  /* Baca pesan WhatsApp order biasa (tanpa link admin) → data order. Cocokkan nama base / bahan aktif / kode kemasan ke katalog. */
+  const BULAN = { jan: 0, feb: 1, mar: 2, apr: 3, mei: 4, may: 4, jun: 5, jul: 6, agu: 7, agt: 7, aug: 7, sep: 8, okt: 9, oct: 9, nov: 10, des: 11, dec: 11 };
+  function parseOrderText(txt) {
+    const lines = txt.split(/\r?\n/).map((l) => l.replace(/^[\s*•·\-_]+/, "").replace(/[*_]+$/, "").trim()).filter(Boolean);
+    const val = (re) => { const l = lines.find((x) => re.test(x)); return l ? l.replace(re, "").trim() : ""; };
+    const id = (txt.match(/MG-\d{6}-[A-Z0-9]{5}/) || [])[0];
+    if (!id) return null;
+    let createdAt = new Date().toISOString();
+    const dm = val(/^Tanggal\s*:/i).match(/(\d{1,2})\s+([A-Za-z]{3})\w*\s+(\d{4})(?:[,\s]+(\d{1,2})[.:](\d{2}))?/);
+    if (dm && BULAN[dm[2].toLowerCase()] !== undefined) createdAt = new Date(+dm[3], BULAN[dm[2].toLowerCase()], +dm[1], +(dm[4] || 0), +(dm[5] || 0)).toISOString();
+    const customer = { name: val(/^Nama\s*:/i), phone: val(/^HP\/WA\s*:/i), email: val(/^Email\s*:/i), city: val(/^Kota\s*:/i),
+      brand: val(/^Nama Brand\s*:/i), brandNote: val(/^Catatan Brand\s*:/i), notes: val(/^Catatan\s*:/i) };
+    const norm = (x) => String(x || "").toLowerCase().replace(/\s+/g, " ").trim();
+    const items = [];
+    let it = null;
+    lines.forEach((l) => {
+      let m;
+      if ((m = l.match(/^SKU\s*\d+\s*:?\s*(.*)$/i))) {
+        it = { baseId: "", variant: "", vol: 0, qty: 0, unit: "ml", actives: [], customActives: "", packagingId: null, noPackaging: true, packagingNote: "",
+          productName: m[1].trim(), sticker: false, bpom: false, halal: false, sample: false };
+        items.push(it); return;
+      }
+      if (!it) return;
+      if ((m = l.match(/^Base\s*:\s*(.+)$/i))) {
+        const s = norm(m[1]);
+        const b = [...C.bases].sort((x, y) => y.name.length - x.name.length).find((x) => s === norm(x.name) || s.startsWith(norm(x.name) + " ("));
+        if (b) {
+          it.baseId = b.id; it.unit = b.unit;
+          const rest = m[1].trim().slice(b.name.length).trim();
+          it.variant = rest.replace(/^\(/, "").replace(/\)$/, "").trim();
+        } else { it.baseId = m[1].trim(); it.baseName = m[1].trim(); }
+      } else if ((m = l.match(/^Volume\s*:\s*([\d.,]+)\s*(\w+)?.*Jumlah\s*:\s*(\d+)/i))) {
+        it.vol = Number(m[1].replace(",", ".")); if (m[2]) it.unit = m[2]; it.qty = Number(m[3]);
+      } else if ((m = l.match(/^Bahan aktif tambahan[^:]*:\s*(.*)$/i))) {
+        const unknown = [];
+        m[1].split(",").map((x) => x.trim()).filter((x) => x && x !== "-").forEach((n) => {
+          const a = C.actives.find((x) => norm(x.name) === norm(n));
+          if (a) it.actives.push(a.id); else unknown.push(n);
+        });
+        if (unknown.length) it.customActives = [it.customActives, unknown.join(", ")].filter(Boolean).join("; ");
+      } else if ((m = l.match(/^Request bahan aktif lain\s*:\s*(.*)$/i))) {
+        it.customActives = [it.customActives, m[1].trim()].filter(Boolean).join("; ");
+      } else if ((m = l.match(/^Kemasan\s*:\s*(.*)$/i))) {
+        if (!/^Tidak ada pilihan kemasan/i.test(m[1])) {
+          const code = m[1].split("·")[0].trim();
+          const p = IDX.packaging[code] || C.packaging.find((x) => norm(x.code) === norm(code));
+          if (p) { it.packagingId = p.id; it.noPackaging = false; } else it.packagingNote = "Kemasan dari pesan: " + m[1].trim();
+        }
+      } else if ((m = l.match(/^Catatan kemasan\s*:\s*(.*)$/i))) {
+        it.packagingNote = [it.packagingNote, m[1].trim()].filter(Boolean).join(" — ");
+      } else if (/^Sticker\s*:/i.test(l)) {
+        const yes = (k) => new RegExp(k + "[^:|]*:\\s*(Ya|✓|✅)", "i").test(l);
+        it.sticker = yes("Sticker"); it.bpom = yes("BPOM"); it.halal = yes("Halal");
+      } else if ((m = l.match(/^Request sample\s*:\s*(\S+)/i))) {
+        it.sample = /^(Ya|✓|✅)/i.test(m[1]);
+      }
+    });
+    if (!items.length) return null;
+    return { id, createdAt, catalogVersion: C.version, customer, items, source: "wa-text" };
+  }
+
+  // Catat order hasil import ke Google Sheet (+ invoice PDF otomatis). Duplikat diabaikan oleh Apps Script.
+  async function recordToSheet(o) {
+    const { endpoint } = sheetCfg();
+    if (!endpoint) return;
+    try {
+      const res = await fetch(endpoint, { method: "POST", headers: { "Content-Type": "text/plain" },
+        body: JSON.stringify({ order: window.MG.enrichOrder(o), packed: window.MG.packOrder(o) }) });
+      const d = await res.json();
+      if (d.error) throw new Error(d.error);
+      if (d.pdf && !d.duplicate) { setOrders(getOrders().map((x) => (x.id === o.id ? { ...x, pdfUrl: d.pdf } : x))); if (A.openId === o.id) openOrder(o.id); }
+      toast(d.duplicate ? `${o.id} sudah ada di Google Sheet` : `${o.id} dicatat ke Google Sheet + invoice PDF dibuat ✓`, 3500);
+    } catch (e) { toast(`${o.id} belum tercatat ke Google Sheet: ${e.message}`, 4500); }
+  }
+
   function importText(text) {
     const found = [...String(text).matchAll(/#import=([A-Za-z0-9+\-$]+)/g)].map((m) => m[1]);
     const list = [];
     found.forEach((s) => { try { list.push(window.MG.unpackOrder(s)); } catch {} });
-    if (!list.length) return toast("Tidak ada link order yang valid");
-    upsertOrders(list);
+    // Pesan WA biasa (tanpa link admin): bisa beberapa pesan sekaligus
+    const parsed = [];
+    if (!list.length) String(text).split(/(?=ORDER MAKLON)/i).forEach((chunk) => { const o = parseOrderText(chunk); if (o) parsed.push(o); });
+    if (!list.length && !parsed.length) return toast("Tidak ada order yang bisa dibaca. Pastikan menempel seluruh pesan, termasuk No. Order.");
+    upsertOrders([...list, ...parsed]);
+    const bad = parsed.filter((o) => o.items.some((x) => !IDX.bases[x.baseId]));
+    if (bad.length) toast("Perhatian: ada base yang tidak dikenali — cek detail order.", 4500);
     render();
+    parsed.forEach((o) => recordToSheet(getOrders().find((x) => x.id === o.id) || o));
+    if (parsed.length === 1) openOrder(parsed[0].id);
   }
 
   async function syncSheet(silent) {
@@ -1023,7 +1105,7 @@
   function importDialog() {
     modalRoot.innerHTML = `<div class="modal-bg" data-close><div class="modal" style="max-width:560px">
       <h3 style="margin-top:0">Import order dari WhatsApp</h3>
-      <p class="small muted">Tempel isi pesan WhatsApp dari customer (atau link admin di dalamnya). Bisa beberapa pesan sekaligus.</p>
+      <p class="small muted">Tempel seluruh isi pesan WhatsApp order dari customer (mulai dari "ORDER MAKLON" sampai akhir). Bisa beberapa pesan sekaligus. Order otomatis masuk dashboard dan dicatat ke Google Sheet + invoice PDF.</p>
       <textarea class="input" id="importText" style="min-height:160px" placeholder="*ORDER MAKLON — MaklonGo* …"></textarea>
       <div class="row" style="margin-top:12px"><button class="btn btn-primary" data-act="doImport">Import</button><button class="btn btn-ghost" data-close>Batal</button></div>
     </div></div>`;

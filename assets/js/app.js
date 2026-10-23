@@ -486,6 +486,26 @@
     return !first;
   }
 
+  // Kirim order yang belum terkonfirmasi tercatat di Google Sheet (Apps Script menolak duplikat, jadi aman diulang)
+  let flushing = false;
+  async function flushPending() {
+    if (flushing || !CFG.orderEndpoint) return;
+    flushing = true;
+    try {
+      for (const p of store.get("mg_pending", [])) {
+        let ok = false;
+        try {
+          const res = await fetch(CFG.orderEndpoint, { method: "POST", headers: { "Content-Type": "text/plain" }, body: p.body, keepalive: p.body.length < 60000 });
+          const d = await res.json();
+          ok = !!(d && d.ok);
+        } catch (e) { ok = false; }
+        const q = store.get("mg_pending", []);
+        store.set("mg_pending", ok ? q.filter((x) => x.id !== p.id)
+          : q.map((x) => (x.id === p.id ? { ...x, tries: x.tries + 1 } : x)).filter((x) => x.tries < 30));
+      }
+    } finally { flushing = false; }
+  }
+
   function submit() {
     if (!validateCustomer()) return;
     const c = S.customer;
@@ -499,13 +519,14 @@
     // Link admin hanya perlu jika order tidak otomatis tercatat ke Google Sheet
     const msg = window.MG.orderMessage(order, !CFG.orderEndpoint);
     const wa = window.MG.waLink(CFG.adminWhatsApp, msg);
-    // Simpan otomatis ke Google Sheet (opsional)
+    // Simpan otomatis ke Google Sheet: antre dulu di browser, kirim dengan konfirmasi, ulangi bila gagal
     if (CFG.orderEndpoint) {
       const body = JSON.stringify({ order: window.MG.enrichOrder(order), packed: window.MG.packOrder(order) });
-      try {
-        if (!(navigator.sendBeacon && navigator.sendBeacon(CFG.orderEndpoint, new Blob([body], { type: "text/plain" }))))
-          fetch(CFG.orderEndpoint, { method: "POST", mode: "no-cors", headers: { "Content-Type": "text/plain" }, body, keepalive: true });
-      } catch (e) { /* tetap lanjut ke WhatsApp */ }
+      const q = store.get("mg_pending", []);
+      q.push({ id: order.id, body, tries: 0 });
+      store.set("mg_pending", q);
+      try { if (navigator.sendBeacon) navigator.sendBeacon(CFG.orderEndpoint, new Blob([body], { type: "text/plain" })); } catch (e) { /* lanjut */ }
+      flushPending();
     }
     const history = store.get("mg_history", []);
     history.unshift({ id: order.id, createdAt: order.createdAt, skus: order.items.length });
@@ -590,6 +611,9 @@
   });
 
   render();
+  flushPending();
+  addEventListener("online", flushPending);
+  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") flushPending(); });
 
   // Terapkan perubahan katalog terbaru dari admin (tambah / edit / hapus base, bahan aktif, kemasan)
   window.MG.refreshCatalog().then((changed) => {
