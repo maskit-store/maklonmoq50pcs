@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>MaklonGo — Rancang Produk Sesuai Budget</title>
+  <meta name="description" content="Rancang produk skincare & personal care brand kamu sendiri mulai 50 pcs dengan harga transparan. Masukkan budget per pcs, kami rekomendasikan base, bahan aktif, kemasan & jumlah order.">
+  <meta name="theme-color" content="#11bab5">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='9' fill='%2311bab5'/%3E%3Ctext x='16' y='22' font-family='Arial' font-weight='800' font-size='16' fill='white' text-anchor='middle'%3EM%3C/text%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <!-- MG_ROOT: lokasi folder assets. "../" saat di repo (preview), "" saat diupload sebagai web tersendiri -->
+  <script>window.MG_ROOT = "../";</script>
+  <link rel="stylesheet" href="../assets/css/style.css?v=20261027-1">
+  <link rel="stylesheet" href="transparan.css?v=20261027-1">
+</head>
+<body class="tp">
+  <header class="topbar">
+    <div class="container wide">
+      <a class="logo" href="#" data-go="home" aria-label="MaklonGo by SAINSGO"><img src="../assets/img/logo-sm.png" alt="MaklonGo by SAINSGO" width="148" height="32"></a>
+      <div class="row" style="gap:8px">
+        <button class="btn btn-ghost btn-sm" data-go="budget">Cari dari budget</button>
+        <button class="cart-pill hidden" id="cartPill" data-go="cart">SKU saya <span class="count" id="cartCount">0</span></button>
+      </div>
+    </div>
+  </header>
+
+  <main id="app" class="container wide"></main>
+
+  <a class="wa-float" id="waFloat" href="#" target="_blank" rel="noopener" aria-label="Chat admin via WhatsApp">
+    <svg viewBox="0 0 32 32" width="30" height="30" aria-hidden="true"><path fill="currentColor" d="M16.04 3C8.86 3 3.03 8.82 3.03 16c0 2.3.6 4.53 1.74 6.5L3 29l6.68-1.75A12.95 12.95 0 0 0 16.04 29C23.2 29 29 23.18 29 16S23.2 3 16.04 3Zm0 23.62c-2 0-3.95-.54-5.65-1.55l-.4-.24-3.97 1.04 1.06-3.86-.26-.4A10.6 10.6 0 0 1 5.4 16c0-5.86 4.77-10.62 10.64-10.62 5.86 0 10.62 4.76 10.62 10.62 0 5.86-4.76 10.62-10.62 10.62Zm5.83-7.95c-.32-.16-1.89-.93-2.18-1.04-.3-.1-.5-.16-.72.16-.2.32-.82 1.04-1 1.25-.19.21-.37.24-.69.08-.32-.16-1.35-.5-2.57-1.59-.95-.85-1.59-1.9-1.78-2.22-.18-.32-.02-.49.14-.65.15-.14.32-.37.48-.56.16-.18.21-.32.32-.53.1-.21.05-.4-.03-.56-.08-.16-.72-1.73-.98-2.37-.26-.62-.53-.54-.72-.55h-.62c-.21 0-.56.08-.85.4-.3.32-1.12 1.09-1.12 2.66 0 1.57 1.14 3.08 1.3 3.3.16.2 2.25 3.43 5.44 4.81.76.33 1.35.52 1.81.67.76.24 1.46.2 2 .12.62-.09 1.89-.77 2.16-1.52.26-.74.26-1.38.18-1.52-.08-.13-.29-.21-.61-.37Z"/></svg>
+    <span class="wa-label">Tanya admin</span>
+  </a>
+
+  <div class="tp-bar hidden" id="tpBar"></div>
+  <div id="modalRoot"></div>
+
+  <script src="../assets/vendor/lz-string.min.js?v=20261027-1"></script>
+  <script src="../assets/js/config.js?v=20261027-1"></script>
+  <script src="../assets/js/catalog.js?v=20261027-1"></script>
+  <script src="../assets/js/common.js?v=20261027-1"></script>
+  <script src="harga-publik.js?v=20261027-1"></script>
+  <script src="transparan.js?v=20261027-1"></script>
+</body>
+</html>
