@@ -109,16 +109,99 @@
 
   /* ------------------------------------------------------------ state */
   const emptyDraft = () => ({ baseId: null, variant: "", vol: null, qty: MOQ, actives: [], pack: null, sticker: "ours", sample: false, productName: "", editIndex: null });
-  const S = Object.assign({ view: "home", q: { cat: "face", perPcs: "", total: "", concern: "", ownPack: false, ownSticker: false }, d: emptyDraft(), cart: [], customer: {}, ui: {} },
+  const S = Object.assign({ view: "home", q: { cat: "face", perPcs: "", total: "", concern: "", ownPack: false, ownSticker: false }, d: emptyDraft(), cart: [], customer: {}, profile: null, ui: {} },
     store.get("mgt_state", {}));
   S.ui = { actCat: "all", packAll: false, packLimit: 12, showAll: false };
-  const persist = () => store.set("mgt_state", { view: S.view, q: S.q, d: S.d, cart: S.cart, customer: S.customer });
+  const persist = () => store.set("mgt_state", { view: S.view, q: S.q, d: S.d, cart: S.cart, customer: S.customer, profile: S.profile });
+  S.reg = { step: "form", busy: false, err: "", info: "" };
+  const registered = () => !!(S.profile && S.profile.done);
   const go = (v) => { S.view = v; persist(); render(); scrollTo({ top: 0 }); };
 
   /* ------------------------------------------------------------ views */
   const nego = () => `<div class="tp-nego">💬 <b>Harga bisa nego</b> langsung ke admin atau disesuaikan kembali dengan kebutuhanmu.
     <a href="${window.MG.waLink(CFG.adminWhatsApp, "Halo admin MaklonGo, saya mau nego / konsultasi harga maklon.")}" target="_blank" rel="noopener">Chat admin →</a></div>`;
   const tierLabel = (t, i) => { const nx = TIERS[i + 1]; return nx ? `${t.min.toLocaleString("id-ID")}–${(nx.min - 1).toLocaleString("id-ID")} pcs` : `${t.min.toLocaleString("id-ID")} pcs`; };
+
+  /* ---------- data diri wajib + verifikasi WhatsApp (OTP) */
+  async function api(body) {
+    const res = await fetch(CFG.orderEndpoint, { method: "POST", headers: { "Content-Type": "text/plain" }, body: JSON.stringify(body) });
+    return res.json();
+  }
+  const PF = [["name", "Nama lengkap", "text", "Nama sesuai KTP"], ["phone", "No. WhatsApp aktif", "tel", "08…"], ["email", "Email", "email", "nama@email.com"],
+    ["ig", "Instagram", "text", "@akunkamu"], ["brand", "Nama brand", "text", "Nama brand yang akan dibuat"]];
+  function viewRegister() {
+    const p = S.profile || {}, r = S.reg;
+    const otp = r.step === "otp";
+    return `<div class="tp-narrow tp-reg">
+      <div class="hero" style="padding:26px 0 8px"><img class="hero-logo" src="${ROOT}assets/img/logo.png" alt="MaklonGo by SAINSGO" width="250" height="54">
+        <h1 style="font-size:clamp(24px,6vw,34px)">Lihat harga maklon <mark>transparan</mark></h1>
+        <p class="lead">Isi data diri dulu untuk membuka kalkulator harga, rekomendasi dari budget, dan simulasi harga sampai 25.000 pcs.</p></div>
+      <div class="card">
+        ${otp ? `<h3 style="margin-top:0">Verifikasi nomor WhatsApp</h3>
+          <p class="small muted">Kode 6 digit sudah dikirim ke WhatsApp <b>+${esc(window.MG.normalizePhone(p.phone))}</b>. Kode berlaku 5 menit.</p>
+          <div class="field"><label for="otpCode">Kode OTP</label><input id="otpCode" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="••••••" class="tp-otp"></div>
+          ${r.err ? `<div class="err" style="margin-bottom:10px">${esc(r.err)}</div>` : ""}
+          <button class="btn btn-primary btn-block btn-lg" data-act="otpverify" ${r.busy ? "disabled" : ""}>${r.busy ? "Memeriksa…" : "Verifikasi & lanjut"}</button>
+          <div class="row between small" style="margin-top:12px"><button class="link-btn" data-act="otpback">← Ubah data / nomor</button><button class="link-btn" data-act="otpresend" ${r.busy ? "disabled" : ""}>Kirim ulang kode</button></div>`
+        : `${PF.map(([k, label, type, ph]) => `<div class="field ${r.bad && r.bad.includes(k) ? "invalid" : ""}"><label for="p-${k}">${label} <span class="req">*</span></label>
+            <input id="p-${k}" type="${type}" value="${esc(p[k] || "")}" placeholder="${ph}" autocomplete="${{ name: "name", phone: "tel", email: "email" }[k] || "off"}">
+            ${k === "phone" ? '<div class="hint">Kami kirim kode verifikasi ke WhatsApp nomor ini.</div>' : ""}</div>`).join("")}
+          ${r.err ? `<div class="err" style="margin-bottom:10px">${esc(r.err)}</div>` : ""}
+          <label class="checkrow" style="margin-bottom:12px"><input type="checkbox" id="p-agree" ${p.agree ? "checked" : ""}><span><b>Saya setuju dihubungi tim MaklonGo</b><span class="small muted">melalui WhatsApp / email terkait penawaran maklon.</span></span></label>
+          <button class="btn btn-primary btn-block btn-lg" data-act="regsubmit" ${r.busy ? "disabled" : ""}>${r.busy ? "Mengirim kode…" : "Kirim kode verifikasi WhatsApp →"}</button>`}
+        ${r.info ? `<div class="notice small" style="margin-top:12px">${r.info}</div>` : ""}
+      </div></div>`;
+  }
+  function readProfile() {
+    const p = { ...(S.profile || {}) };
+    PF.forEach(([k]) => { p[k] = document.getElementById("p-" + k).value.trim(); });
+    p.agree = document.getElementById("p-agree").checked;
+    p.ig = p.ig && !p.ig.startsWith("@") ? "@" + p.ig : p.ig;
+    const bad = PF.map(([k]) => k).filter((k) => !p[k]);
+    if (p.phone && !/^628\d{7,12}$/.test(window.MG.normalizePhone(p.phone))) bad.push("phone");
+    if (p.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(p.email)) bad.push("email");
+    if (p.ig && !/^@[A-Za-z0-9._]{1,30}$/.test(p.ig)) bad.push("ig");
+    return { p, bad };
+  }
+  async function regSubmit() {
+    const { p, bad } = readProfile();
+    S.profile = { ...p, done: false, verified: false }; persist();
+    if (bad.length) { S.reg = { ...S.reg, err: "Lengkapi / perbaiki: " + bad.map((k) => PF.find((x) => x[0] === k)[1]).join(", "), bad }; return render(); }
+    if (!p.agree) { S.reg = { ...S.reg, err: "Centang persetujuan untuk dihubungi tim MaklonGo.", bad: [] }; return render(); }
+    S.reg = { step: "form", busy: true, err: "", info: "", bad: [] }; render();
+    try {
+      const d = await api({ action: "otpSend", phone: p.phone });
+      if (d.ok) { S.reg = { step: "otp", busy: false, err: "", info: "" }; render(); const el = document.getElementById("otpCode"); if (el) el.focus(); return; }
+      // OTP belum diaktifkan di Apps Script (mode preview) → lanjut tanpa verifikasi
+      if (d.error === "otp_not_configured" || d.error === "invalid order") return finishReg(false, "Mode preview: verifikasi OTP WhatsApp belum diaktifkan, data tersimpan tanpa verifikasi.");
+      S.reg = { step: "form", busy: false, err: d.error || "Gagal mengirim kode", info: "" }; render();
+    } catch (e) { S.reg = { step: "form", busy: false, err: "Koneksi gagal, coba lagi.", info: "" }; render(); }
+  }
+  async function otpVerify() {
+    const code = (document.getElementById("otpCode").value || "").replace(/\D/g, "");
+    if (code.length !== 6) { S.reg = { ...S.reg, err: "Masukkan 6 digit kode" }; return render(); }
+    S.reg = { ...S.reg, busy: true, err: "" }; render();
+    try {
+      const d = await api({ action: "otpVerify", phone: S.profile.phone, code });
+      if (d.ok) return finishReg(true);
+      S.reg = { ...S.reg, busy: false, err: d.error || "Kode salah" }; render();
+    } catch (e) { S.reg = { ...S.reg, busy: false, err: "Koneksi gagal, coba lagi." }; render(); }
+  }
+  async function otpResend() {
+    S.reg = { ...S.reg, busy: true, err: "" }; render();
+    try { const d = await api({ action: "otpSend", phone: S.profile.phone }); S.reg = { ...S.reg, busy: false, err: d.ok ? "" : d.error, info: d.ok ? "Kode baru sudah dikirim." : "" }; }
+    catch (e) { S.reg = { ...S.reg, busy: false, err: "Koneksi gagal, coba lagi." }; }
+    render();
+  }
+  function finishReg(verified, info) {
+    S.profile = { ...S.profile, phone: window.MG.normalizePhone(S.profile.phone), verified, done: true, at: new Date().toISOString() };
+    const pr = S.profile;
+    S.customer = { ...S.customer, name: pr.name, phone: pr.phone, email: pr.email, brand: pr.brand, ig: pr.ig };
+    S.reg = { step: "form", busy: false, err: "", info: "" };
+    api({ action: "lead", lead: { name: pr.name, phone: pr.phone, email: pr.email, ig: pr.ig, brand: pr.brand } }).catch(() => {});
+    toast(info || "Nomor WhatsApp terverifikasi ✓", info ? 5000 : 2600);
+    go("home");
+  }
 
   function viewHome() {
     return `<section class="hero tp-hero">
@@ -169,15 +252,24 @@
       </div></div>`;
   }
 
-  // Tabel "kalau pesan lebih banyak"
+  // Gambaran harga bertingkat: dari qty pilihan sampai 25.000 pcs, dengan batang perbandingan
   function ladderHtml(d, compact) {
-    const base = priceOf(d);
+    const cur = priceOf(d);
     const rows = ladder(Number(d.qty) || MOQ).map((n) => ({ n, p: priceOf(d, n) }));
-    if (compact) return `<div class="tp-ladder-mini">${rows.slice(1, 4).map(({ n, p }) => `<span><b>${n.toLocaleString("id-ID")} pcs</b> ${rp(p.allIn)}/pcs <em>−${Math.max(0, Math.round((1 - p.allIn / base.allIn) * 100))}%</em></span>`).join("")}</div>`;
-    return `<div class="tp-ladder"><h4>📉 Gambaran harga kalau pesan lebih banyak</h4>
-      <table class="tp-lines"><tr class="hd"><td>Jumlah</td><td>Produksi/pcs</td><td>Total/pcs*</td><td>Hemat</td></tr>
-      ${rows.map(({ n, p }) => `<tr class="${n === base.qty ? "cur" : ""}" data-ladq="${n}" title="Total ${rp(p.total)}"><td><b>${n.toLocaleString("id-ID")}</b></td><td>${rp(p.unit)}</td><td><b>${rp(p.allIn)}</b></td><td>${n !== base.qty ? `<em>−${Math.max(0, Math.round((1 - p.allIn / base.allIn) * 100))}%</em>` : "<em>pilihanmu</em>"}</td></tr>`).join("")}
-      </table><div class="small muted">*incl. BPOM & Halal. Klik baris untuk memakai jumlah tersebut. Di atas ${MAXQ.toLocaleString("id-ID")} pcs hubungi admin.</div></div>`;
+    const max = Math.max(...rows.map((r) => r.p.allIn));
+    const last = rows[rows.length - 1];
+    const gap = cur.allIn - last.p.allIn;
+    const pct = (p) => Math.max(0, Math.round((1 - p.allIn / cur.allIn) * 100));
+    const head = rows.length > 1
+      ? `<div class="tp-gap">Pesan <b>${last.n.toLocaleString("id-ID")} pcs</b> = <b>${rp(last.p.allIn)}/pcs</b>, <b class="ok">${pct(last.p)}% lebih murah</b> dari ${cur.qty.toLocaleString("id-ID")} pcs (selisih ${rp(gap)}/pcs)</div>` : "";
+    return `<div class="tp-ladder ${compact ? "compact" : ""}">
+      ${compact ? "" : "<h4>📉 Harga bertingkat: makin banyak, makin murah</h4>"}${head}
+      <div class="tp-ladrows">${rows.map(({ n, p }) => `<div class="tp-ladrow ${n === cur.qty ? "cur" : ""}" ${compact ? "" : `data-ladq="${n}"`} title="Total ${rp(p.total)}">
+        <span class="q">${n.toLocaleString("id-ID")} pcs</span>
+        <span class="bar"><i style="width:${Math.max(4, (p.allIn / max) * 100)}%"></i></span>
+        <span class="v">${rp(p.allIn)}</span>
+        <span class="h">${n === cur.qty ? (compact ? "" : "pilihanmu") : `−${pct(p)}%`}</span></div>`).join("")}</div>
+      ${compact ? "" : `<div class="small muted">Harga per pcs sudah termasuk BPOM & Halal. Klik baris untuk memakai jumlah tersebut. Di atas ${MAXQ.toLocaleString("id-ID")} pcs hubungi admin.</div>`}</div>`;
   }
 
   function recCard(r, i) {
@@ -347,8 +439,11 @@
     const c = S.customer;
     const big = S.cart.some((d) => Number(d.qty) > WEBQ);
     const f = (k, label, type = "text", ph = "") => `<div class="field"><label for="c-${k}">${label} <span class="req">*</span></label><input id="c-${k}" type="${type}" value="${esc(c[k] || "")}" placeholder="${ph}"></div>`;
+    const pr = S.profile;
     return `<div class="tp-narrow"><h2 class="tp-h" style="margin-top:18px">Data pemesan</h2><div class="card">
-      ${f("name", "Nama")}${f("phone", "No. WhatsApp", "tel", "08…")}${f("email", "Email", "email")}${f("city", "Kota")}${f("brand", "Nama brand")}
+      <dl class="kv" style="margin:0 0 14px"><dt>Nama</dt><dd>${esc(pr.name)}</dd><dt>WhatsApp</dt><dd>+${esc(pr.phone)} ${pr.verified ? '<span class="tag green">terverifikasi</span>' : ""}</dd>
+        <dt>Email</dt><dd>${esc(pr.email)}</dd><dt>Instagram</dt><dd>${esc(pr.ig)}</dd><dt>Brand</dt><dd>${esc(pr.brand)}</dd></dl>
+      ${f("city", "Kota")}
       <div class="field"><label for="c-brandNote">Konsep brand <span class="req">*</span></label><textarea id="c-brandNote" placeholder="Target pasar, konsep, kisaran harga jual…">${esc(c.brandNote || "")}</textarea></div>
       <div class="notice small">Harga di web adalah estimasi berdasarkan harga katalog dan <b>bisa nego / disesuaikan kembali</b> bersama admin. Invoice & MoU resmi dikirim via WhatsApp. DP 50%, pelunasan + ongkir setelah NIE BPOM terbit.${big ? ` Pesanan di atas ${WEBQ} pcs dikirim ke <b>CS Business Development MaklonGo</b>.` : ""}</div>
       <button class="btn btn-primary btn-block btn-lg" data-act="send" style="margin-top:14px">Kirim pesanan via WhatsApp</button></div></div>`;
@@ -361,14 +456,18 @@
 
   function render() {
     const views = { home: viewHome, budget: viewBudget, results: viewResults, build: viewBuild, cart: viewCart, customer: viewCustomer, sent: viewSent };
-    app.innerHTML = (views[S.view] || viewHome)();
-    document.getElementById("cartPill").classList.toggle("hidden", !S.cart.length);
+    app.innerHTML = registered() ? (views[S.view] || viewHome)() : viewRegister();
+    const who = document.getElementById("who");
+    who.classList.toggle("hidden", !registered());
+    if (registered()) who.innerHTML = `${S.profile.verified ? "✅" : "👤"} ${esc(S.profile.name.split(" ")[0])} · <u>ubah</u>`;
+    document.getElementById("btnBudget").classList.toggle("hidden", !registered());
+    document.getElementById("cartPill").classList.toggle("hidden", !S.cart.length || !registered());
     document.getElementById("cartCount").textContent = S.cart.length;
     renderBar();
   }
   // Ringkasan mengambang saat merakit
   function renderBar() {
-    const show = S.view === "build" && IDX.bases[S.d.baseId];
+    const show = registered() && S.view === "build" && IDX.bases[S.d.baseId];
     bar.classList.toggle("hidden", !show);
     document.body.classList.toggle("has-tpbar", !!show);
     if (!show) return;
@@ -400,11 +499,12 @@
   }
   function send() {
     const c = S.customer;
-    const need = ["name", "phone", "email", "city", "brand", "brandNote"].filter((k) => !String(c[k] || "").trim());
+    Object.assign(c, { name: S.profile.name, phone: S.profile.phone, email: S.profile.email, brand: S.profile.brand, ig: S.profile.ig });
+    const need = ["city", "brandNote"].filter((k) => !String(c[k] || "").trim());
     if (need.length) { toast("Lengkapi: " + need.join(", ")); return; }
     const id = window.MG.newOrderId();
     const big = S.cart.some((d) => Number(d.qty) > WEBQ);
-    const L = [`*ORDER MAKLON (HARGA TRANSPARAN) — ${CFG.appName}*`, `No. Order: *${id}*`, "", "*Data Customer*", `Nama: ${c.name}`, `HP/WA: ${c.phone}`, `Email: ${c.email}`, `Kota: ${c.city}`, `Nama Brand: ${c.brand}`, `Catatan Brand: ${c.brandNote}`];
+    const L = [`*ORDER MAKLON (HARGA TRANSPARAN) — ${CFG.appName}*`, `No. Order: *${id}*`, "", "*Data Customer*", `Nama: ${c.name}`, `HP/WA: ${c.phone}${S.profile.verified ? " (terverifikasi OTP)" : ""}`, `Email: ${c.email}`, `Instagram: ${c.ig || "-"}`, `Kota: ${c.city}`, `Nama Brand: ${c.brand}`, `Catatan Brand: ${c.brandNote}`];
     let grand = 0;
     S.cart.forEach((d, i) => {
       const b = IDX.bases[d.baseId] || {}, p = priceOf(d), pk = IDX.packaging[d.pack];
@@ -425,9 +525,11 @@
   document.addEventListener("click", (e) => {
     const lq = e.target.closest("[data-ladq]");
     if (lq && S.view === "build") { S.d.qty = Number(lq.dataset.ladq); persist(); return rerenderBuild(); }
+    if (e.target.closest("#who")) { S.reg = { step: "form", busy: false, err: "", info: "" }; S.profile = { ...S.profile, done: false }; persist(); return render(); }
     const t = e.target.closest("button, [data-go]");
     if (!t || t.disabled) return;
     const ds = t.dataset, d = S.d;
+    if (!registered() && !["regsubmit", "otpverify", "otpresend", "otpback"].includes(ds.act)) { e.preventDefault(); return; }
     if (ds.go) { e.preventDefault(); return go(ds.go); }
     if (ds.startBuild !== undefined) { S.d = emptyDraft(); S.ui.pickCat = S.q.cat; return go("build"); }
     if (ds.qcat) { S.q.cat = ds.qcat; persist(); return rerenderBuild(); }
@@ -456,6 +558,10 @@
       case "morepack": S.ui.packLimit += 24; return rerenderBuild();
       case "savesku": return saveSku();
       case "send": return send();
+      case "regsubmit": return regSubmit();
+      case "otpverify": return otpVerify();
+      case "otpresend": return otpResend();
+      case "otpback": S.reg = { step: "form", busy: false, err: "", info: "" }; return render();
     }
   });
   document.addEventListener("change", (e) => {
@@ -471,6 +577,7 @@
     if (t.id === "qPer") S.q.perPcs = t.value;
     if (t.id === "qTot") S.q.total = t.value;
     if (t.id && t.id.startsWith("c-")) { S.customer[t.id.slice(2)] = t.value; persist(); }
+    if (t.id === "otpCode" && t.value.replace(/\D/g, "").length === 6 && !S.reg.busy) otpVerify();
   });
 
   if (!["home", "budget", "results", "build", "cart", "customer"].includes(S.view)) S.view = "home";

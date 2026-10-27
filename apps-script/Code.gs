@@ -42,6 +42,11 @@ function doPost(e) {
   let data;
   try { data = JSON.parse(e.postData.contents); } catch (err) { return json_({ error: "invalid json" }); }
 
+  // Web harga transparan: verifikasi nomor WhatsApp (OTP) & data calon klien
+  if (data.action === "otpSend") return json_(otpSend_(data));
+  if (data.action === "otpVerify") return json_(otpVerify_(data));
+  if (data.action === "lead") return json_(saveLead_(data.lead || {}));
+
   if (data.action === "syncPrices") {
     if (!checkKey_(data.key)) return json_({ error: "unauthorized" });
     const savedAt = saveJsonFile_("PRICES", "MaklonGo - harga (RAHASIA).json", data.prices);
@@ -156,6 +161,78 @@ function doGet(e) {
   const rows = sh.getRange(2, 1, n, INVOICE_HEADERS.length).getValues();
   return json_({ orders: rows.filter((r) => r[COL.json - 1]).map((r) => ({
     packed: r[COL.packed - 1] || null, order: JSON.parse(r[COL.json - 1]), pdf: r[COL.view - 1] || r[COL.link - 1] })) });
+}
+
+/* ============================================================ OTP WhatsApp (Fonnte) & leads
+ * Script property FONNTE_TOKEN = token device dari https://fonnte.com (menu Device → token).
+ * Tanpa token: otpSend membalas "otp_not_configured" dan web melewati verifikasi.
+ */
+const LEADS_TAB = "Leads Web";
+const LEADS_HEADERS = ["Waktu", "Nama", "No WhatsApp", "WA Terverifikasi", "Email", "Instagram", "Nama Brand", "Sumber"];
+
+function normPhone_(p) {
+  let d = String(p || "").replace(/\D/g, "");
+  if (d.indexOf("0") === 0) d = "62" + d.slice(1); else if (d.indexOf("8") === 0) d = "62" + d;
+  return d;
+}
+function otpHash_(phone, code) {
+  return Utilities.base64Encode(Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, phone + ":" + code + ":" + (PropertiesService.getScriptProperties().getProperty("ADMIN_KEY") || "")));
+}
+
+function otpSend_(d) {
+  const phone = normPhone_(d.phone);
+  if (!/^628\d{7,12}$/.test(phone)) return { error: "Nomor WhatsApp tidak valid" };
+  const token = PropertiesService.getScriptProperties().getProperty("FONNTE_TOKEN");
+  if (!token) return { error: "otp_not_configured" };
+  const cache = CacheService.getScriptCache();
+  if (cache.get("otpwait:" + phone)) return { error: "Tunggu 60 detik sebelum meminta kode baru" };
+  const count = Number(cache.get("otpcnt:" + phone) || 0);
+  if (count >= 5) return { error: "Terlalu banyak permintaan kode. Coba lagi 1 jam lagi." };
+  const global = Number(cache.get("otpglobal") || 0);
+  if (global >= 300) return { error: "Layanan verifikasi sedang sibuk, coba lagi nanti" };
+  const code = String(100000 + (parseInt(Utilities.getUuid().replace(/-/g, "").slice(0, 8), 16) % 900000));
+  const res = UrlFetchApp.fetch("https://api.fonnte.com/send", {
+    method: "post", headers: { Authorization: token }, muteHttpExceptions: true,
+    payload: { target: phone, message: "Kode verifikasi MaklonGo: *" + code + "*\nBerlaku 5 menit. Jangan berikan kode ini kepada siapa pun." },
+  });
+  let body = {};
+  try { body = JSON.parse(res.getContentText()); } catch (e) {}
+  if (!body.status) return { error: "Gagal mengirim WhatsApp" + (body.reason ? ": " + body.reason : "") };
+  cache.put("otp:" + phone, otpHash_(phone, code), 300);
+  cache.put("otptry:" + phone, "0", 300);
+  cache.put("otpwait:" + phone, "1", 60);
+  cache.put("otpcnt:" + phone, String(count + 1), 3600);
+  cache.put("otpglobal", String(global + 1), 3600);
+  return { ok: true };
+}
+
+function otpVerify_(d) {
+  const phone = normPhone_(d.phone);
+  const cache = CacheService.getScriptCache();
+  const h = cache.get("otp:" + phone);
+  if (!h) return { error: "Kode sudah kedaluwarsa, minta kode baru" };
+  const tries = Number(cache.get("otptry:" + phone) || 0);
+  if (tries >= 5) { cache.remove("otp:" + phone); return { error: "Terlalu banyak percobaan, minta kode baru" }; }
+  if (otpHash_(phone, String(d.code || "").trim()) !== h) { cache.put("otptry:" + phone, String(tries + 1), 300); return { error: "Kode salah" }; }
+  cache.remove("otp:" + phone);
+  cache.put("otpok:" + phone, "1", 21600);
+  return { ok: true };
+}
+
+function saveLead_(l) {
+  const phone = normPhone_(l.phone);
+  if (!l.name || !phone) return { error: "data tidak lengkap" };
+  const verified = CacheService.getScriptCache().get("otpok:" + phone) === "1";
+  const lock = LockService.getScriptLock();
+  lock.waitLock(20000);
+  try {
+    const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+    let sh = ss.getSheetByName(LEADS_TAB);
+    if (!sh) { sh = ss.insertSheet(LEADS_TAB); sh.getRange(1, 1, 1, LEADS_HEADERS.length).setValues([LEADS_HEADERS]).setFontWeight("bold"); sh.setFrozenRows(1); }
+    const clip = (x) => String(x || "").slice(0, 200);
+    sh.appendRow([new Date(), clip(l.name), "'" + phone, verified ? "Ya" : "Tidak", clip(l.email), clip(l.ig), clip(l.brand), clip(l.source || "web harga transparan")]);
+  } finally { lock.releaseLock(); }
+  return { ok: true, verified: verified };
 }
 
 /* File JSON di My Drive; ID disimpan di Script Properties <NAME>_FILE_ID */

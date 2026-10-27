@@ -78,3 +78,31 @@ body.has-tpbar main { padding-bottom: 90px; }
 body.has-tpbar .wa-float { bottom: 84px; }
 @media (min-width: 960px) { .tp-bar { display: none; } body.has-tpbar main { padding-bottom: 30px; } body.has-tpbar .wa-float { bottom: 20px; } }
 .tp-ladder .tp-lines td { white-space: nowrap; font-size: 12.5px; }
+/* batang harga bertingkat */
+.tp-gap { background: var(--accent-soft); color: #6b4c00; border-radius: 10px; padding: 8px 10px; font-size: 12.5px; margin: 6px 0 8px; }
+.tp-gap .ok { color: var(--primary); }
+.tp-ladrows { display: grid; gap: 4px; }
+.tp-ladrow { display: grid; grid-template-columns: 74px 1fr auto 52px; gap: 8px; align-items: center; font-size: 12.5px; padding: 3px 4px; border-radius: 8px; }
+.tp-ladrow[data-ladq] { cursor: pointer; }
+.tp-ladrow[data-ladq]:hover { background: var(--primary-soft); }
+.tp-ladrow.cur { background: var(--accent-soft); font-weight: 700; }
+.tp-ladrow .q { font-weight: 700; white-space: nowrap; }
+.tp-ladrow .bar { height: 10px; background: #eee9df; border-radius: 99px; overflow: hidden; }
+.tp-ladrow .bar i { display: block; height: 100%; background: linear-gradient(90deg, var(--brand), var(--primary)); border-radius: 99px; }
+.tp-ladrow.cur .bar i { background: var(--accent); }
+.tp-ladrow .v { font-weight: 700; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.tp-ladrow .h { color: var(--primary); font-weight: 800; text-align: right; white-space: nowrap; font-size: 11.5px; }
+.tp-ladder.compact { margin-top: 10px; padding-top: 8px; }
+/* data diri & OTP */
+.who { border: 1px solid var(--line); background: var(--surface); border-radius: 999px; padding: 6px 10px; font-size: 12.5px; cursor: pointer; white-space: nowrap; max-width: 160px; overflow: hidden; text-overflow: ellipsis; }
+.tp-reg .card { max-width: 520px; margin: 0 auto 30px; }
+.tp-otp { font-size: 26px !important; letter-spacing: .5em; text-align: center; font-weight: 800; }
+.tp-reg .err { color: var(--danger); font-size: 13px; }
+@media (max-width: 420px) { #btnBudget { display: none; } }
+/* grid satu kolom di HP: jangan melebar mengikuti konten (mencegah halaman ter-zoom out) */
+.tp-build, .tp-recs, .tp-entry, .tp-acts, .tp-packopts, .tp-bases { grid-template-columns: minmax(0, 1fr); }
+.tp-main, .tp-side { min-width: 0; }
+@media (min-width: 640px) { .tp-entry, .tp-acts, .tp-packopts { grid-template-columns: 1fr 1fr; } }
+@media (min-width: 760px) { .tp-recs { grid-template-columns: 1fr 1fr; } }
+@media (min-width: 1100px) { .tp-recs { grid-template-columns: 1fr 1fr 1fr; } }
+@media (min-width: 960px) { .tp-build { grid-template-columns: minmax(0, 1fr) 360px; } }
