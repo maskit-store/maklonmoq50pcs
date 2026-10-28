@@ -66,44 +66,108 @@
   // Qty pembanding untuk gambaran "kalau pesan lebih banyak"
   const ladder = (q) => [...new Set([q, ...TIERS.map((t) => t.min)])].filter((x) => x >= q && x <= MAXQ).sort((a, b) => a - b);
 
-  /* ------------------------------------------------------------ rekomendasi */
-  function recommend(q) {
+  /* ------------------------------------------------------------ penasihat budget */
+  // Manfaat bahan yang umum ada di formula base (untuk alasan rekomendasi)
+  const ING = [
+    [/niacinamide/i, "mencerahkan & menyamarkan noda"], [/licorice/i, "mencerahkan & menenangkan"], [/kojic|arbutin|mulberry|albae|glutathione|vitamin c/i, "mencerahkan"],
+    [/hyaluronic/i, "menghidrasi intens"], [/sodium lactate|glycerin/i, "menjaga kelembapan"], [/asam amino|amino/i, "menjaga kelembapan & skin barrier"],
+    [/panthenol|vit\.? ?b5/i, "menenangkan & memperbaiki skin barrier"], [/ceramide/i, "memperkuat skin barrier"], [/aloe/i, "menenangkan & melembapkan"],
+    [/centella|cica|mugwort|calamine|chamomile/i, "menenangkan kulit"], [/collagen/i, "menjaga kekenyalan kulit"], [/tea tree|salicylic|sulfur|zinc/i, "membantu mengatasi jerawat & minyak"],
+    [/ginseng/i, "menutrisi & anti-aging"], [/vitamin e|tocopher/i, "antioksidan"], [/honey|madu/i, "melembapkan & menutrisi"], [/moringa|pomegranate|rosella|green tea/i, "antioksidan alami"],
+    [/urang|aring|biotin|keratin/i, "menutrisi & menguatkan rambut"], [/essential oil|lavender|eucalyptus|cajuput|sereh|citronella/i, "aromaterapi & menyegarkan"],
+    [/xylitol|goat milk/i, "merawat kesehatan gigi & mulut"], [/spf|uv|zinc oxide|titanium/i, "melindungi dari sinar UV"],
+  ];
+  const ingWhy = (name) => { const m = ING.find(([re]) => re.test(name)); return m ? m[1] : ""; };
+  // Kata kunci per kategori manfaat → dicocokkan dengan kandungan base
+  const CONCERN_KW = {
+    brightening: /niacinamide|licorice|kojic|arbutin|mulberry|albae|vitamin c|lemon|pomegranate|glutathione|tone up/i,
+    hydrating: /hyaluronic|sodium lactate|aloe|glycerin|amino|panthenol/i, moisturizing: /ceramide|shea|oil|amino|hyaluronic|panthenol|butter/i,
+    calming: /centella|aloe|panthenol|mugwort|calamine|chamomile|licorice/i, barrier: /ceramide|panthenol|amino|niacinamide/i,
+    acne: /tea tree|salicylic|sulfur|zinc|niacinamide|centella/i, oil: /niacinamide|tea tree|zinc|clay/i, exfoliating: /aha|bha|glycolic|lactic|salicylic|scrub/i,
+    antiaging: /collagen|ginseng|retinol|peptide|niacinamide/i, antioxidant: /vitamin e|green tea|pomegranate|moringa|rosella|ginseng/i,
+    uv: /spf|uv|sun/i, hair: /keratin|aloe|urang|ginseng|almond|moringa/i, hairgrowth: /urang|ginseng|biotin|rosemary/i,
+    deodorizing: /zinc|enzyme|deodor/i, aroma: /oil|lavender|aroma/i, warming: /warming|ginger|cajuput|eucalyptus|menthol/i, repellent: /citronella|sereh|lavender|repel/i, oral: /xylitol|goat milk|tooth/i,
+  };
+  function baseSupports(b, concern) {
+    const acts = b.actives || [];
+    const kw = CONCERN_KW[concern];
+    const hit = kw ? acts.filter((x) => kw.test(x)) : [];
+    return { hit, all: acts };
+  }
+
+  // Pilih opsi yang beragam: maksimal 1 per jenis perlakuan bahan aktif dulu (tanpa / 1 aktif / formula tetap), lalu sisanya
+  function diverse(list, k = 3) {
+    const sorted = list.slice().sort((x, y) => (x.qty - y.qty) || (x.pr.allIn - y.pr.allIn));
+    const grp = (c) => (c.sig.includes("a0") ? "a0" : c.sig.includes("a1") ? "a1" : "a");
+    const out = [], seen = new Set();
+    sorted.forEach((c) => { if (out.length < k && !seen.has(grp(c))) { seen.add(grp(c)); out.push(c); } });
+    sorted.forEach((c) => { if (out.length < k && !out.includes(c)) out.push(c); });
+    return out.sort((x, y) => (x.qty - y.qty) || (x.pr.allIn - y.pr.allIn));
+  }
+
+  // Cari rencana produksi termurah-kompromi yang masuk budget untuk 1 base
+  function planFor(b, q, opts = {}) {
     const X = Number(q.perPcs) || 0, T = Number(q.total) || 0;
-    const inBase = (b, a) => (b.actives || []).some((x) => x.toLowerCase().includes(a.name.toLowerCase().split(" ")[0]));
-    const pool = q.concern ? C.actives.filter((a) => a.cats.includes(q.concern) && PP.actives[a.id]) : [];
-    const sticker = q.ownSticker ? "own" : "ours";
-    // qty paling kecil yang total per pcs-nya ≤ budget (atau qty terbesar yang muat di total budget)
+    const inBase = (a) => (b.actives || []).some((x) => x.toLowerCase().includes(a.name.toLowerCase().split(" ")[0]));
+    const pool = q.concern ? C.actives.filter((a) => a.cats.includes(q.concern) && PP.actives[a.id] && !inBase(a)) : [];
+    const reqN = Math.min(2, pool.length);
+    const fits = (d, n) => { const p = priceOf(d, n); return (!X || p.allIn <= X) && (!T || p.total <= T); };
     const bestQty = (d) => {
-      if (T) { let best = null; QLIST.forEach((n) => { if (priceOf(d, n).total <= T) best = n; }); return best && (!X || priceOf(d, best).allIn <= X) ? best : null; }
-      return QLIST.find((n) => priceOf(d, n).allIn <= X) || null;
+      if (T) { let best = null; QLIST.forEach((n) => { if (fits(d, n)) best = n; }); return best; }
+      return QLIST.find((n) => fits(d, n)) || null;
     };
+    const near = FIXED_VOL[b.id] ? b.vol : VOLS.reduce((m, v) => (Math.abs(v - b.vol) < Math.abs(m - b.vol) ? v : m), VOLS[0]);
+    const volsDown = FIXED_VOL[b.id] ? [b.vol] : [near, ...VOLS.filter((v) => v < near && v >= b.vol * 0.25).sort((x, y) => y - x).slice(0, 3)];
+    const levers = { acts: [], sticker: q.ownSticker ? [true] : [false, true], pack: q.ownPack ? [true] : [false, true] };
+    for (let n = reqN; n >= 0; n--) levers.acts.push(n);
+    const all = [];
+    volsDown.forEach((v, vi) => levers.pack.forEach((ownPack) => {
+      const pack = ownPack ? null : packsFor(b, v)[0];
+      if (!ownPack && !pack) return;
+      levers.sticker.forEach((ownSticker) => levers.acts.forEach((n) => {
+        if (opts.noCompromise && (vi || n < reqN || (ownPack && !q.ownPack) || (ownSticker && !q.ownSticker))) return;
+        const acts = pool.slice().sort((x, y) => actP(x.id, v) - actP(y.id, v)).slice(0, n).map((a) => a.id);
+        const d = { baseId: b.id, vol: v, actives: acts, pack: ownPack ? "own" : pack.id, sticker: ownSticker ? "own" : "ours", sample: false };
+        const qty = bestQty(d);
+        if (!qty) return;
+        const tierIdx = TIERS.indexOf(tierOf(qty));
+        const score = (reqN - n) * 1 + (n === 0 && reqN ? 0.5 : 0) + (ownSticker && !q.ownSticker ? 2 : 0) + (ownPack && !q.ownPack ? 3 : 0) + vi * 1.5 + tierIdx * 1.2;
+        all.push({ b, v, near, pack, d, qty, pr: priceOf(d, qty), fit: true, score, n, reqN, ownPack, ownSticker, vi,
+          sig: [n < reqN ? (n ? "a1" : "a0") : "", vi ? "v" : "", ownSticker && !q.ownSticker ? "s" : "", ownPack && !q.ownPack ? "p" : ""].join("") });
+      }));
+    }));
+    if (!all.length) return null;
+    all.sort((x, y) => (x.score - y.score) || (x.qty - y.qty));
+    const best = all[0];
+    // Opsi lain: strategi berbeda (mis. tanpa bahan aktif, kemasan sendiri) — yang terbaik per strategi, utamakan qty lebih kecil
+    const bySig = {};
+    all.forEach((c) => { if (c.sig !== best.sig && (!bySig[c.sig] || c.qty < bySig[c.sig].qty || (c.qty === bySig[c.sig].qty && c.pr.allIn < bySig[c.sig].pr.allIn))) bySig[c.sig] = c; });
+    best.allAlts = Object.values(bySig);
+    best.alts = diverse(best.allAlts);
+    return best;
+  }
+
+  // Alasan & strategi yang dipakai sebuah rencana (dibanding permintaan awal)
+  function explain(r, q) {
     const out = [];
-    basesPriced().filter((b) => b.cat === q.cat).forEach((b) => {
-      const vols = volsFor(b).filter((v) => FIXED_VOL[b.id] || (v >= b.vol * 0.5 && v <= b.vol * 2));
-      const cands = [];
-      vols.forEach((v) => {
-        let pack = null;
-        if (!q.ownPack) { pack = packsFor(b, v)[0]; if (!pack) return; }
-        const d = { baseId: b.id, vol: v, actives: [], pack: pack ? pack.id : "own", sticker, sample: false };
-        let qty = bestQty(d);
-        if (qty) {
-          // Tambah bahan aktif (maks. 2) selama qty tetap di tier harga yang sama
-          pool.filter((a) => !inBase(b, a)).sort((x, y) => actP(x.id, v) - actP(y.id, v)).forEach((a) => {
-            if (d.actives.length >= 2) return;
-            const n = bestQty({ ...d, actives: [...d.actives, a.id] });
-            if (n && tierOf(n) === tierOf(qty)) { d.actives.push(a.id); qty = n; }
-          });
-        }
-        const fit = !!qty;
-        const pq = qty || MAXQ;
-        const pr = priceOf(d, pq);
-        cands.push({ b, v, pack, d, qty: pq, pr, fit, dist: Math.abs(Math.log(v / b.vol)), ownPack: !!q.ownPack, ownSticker: !!q.ownSticker });
-      });
-      if (!cands.length) return;
-      cands.sort((x, y) => (y.fit - x.fit) || (x.dist - y.dist) || (x.qty - y.qty) || (x.pr.unit - y.pr.unit));
-      out.push(cands[0]);
-    });
-    out.sort((x, y) => (y.fit - x.fit) || (x.fit ? (x.qty - y.qty) || (y.d.actives.length - x.d.actives.length) : x.pr.allIn - y.pr.allIn));
+    const concernName = q.concern ? (IDX.activeCats[q.concern] || {}).name : "";
+    if (r.vi) out.push({ tag: `📏 Ukuran ${vlabel(r.v)} ${r.b.unit}`, why: `Turun dari ${vlabel(r.near)} ${r.b.unit} — ukuran trial/travel size, modal per pcs lebih ringan & pas untuk launching atau tes pasar.` });
+    if (r.reqN && r.n < r.reqN) {
+      if (r.n === 0) {
+        const { hit, all } = baseSupports(r.b, q.concern);
+        const list = (hit.length ? hit : all).slice(0, 4);
+        out.push({ tag: "🧪 Tanpa bahan aktif tambahan", why: list.length
+          ? `Formula base sudah mengandung ${list.map((x) => `<b>${esc(x)}</b>${ingWhy(x) ? ` (${ingWhy(x)})` : ""}`).join(", ")}${hit.length && concernName ? ` — sudah mendukung klaim <b>${esc(concernName)}</b>` : ""}. Tanpa tambahan pun produk sudah bekerja.`
+          : "Formula base sudah lengkap untuk fungsinya; bahan aktif bisa ditambahkan di produksi berikutnya." });
+      } else {
+        const a = IDX.actives[r.d.actives[0]];
+        out.push({ tag: "🧪 Cukup 1 bahan aktif", why: `Fokus satu klaim utama dengan <b>${esc(a.name)}</b>${ingWhy(a.name) ? ` (${ingWhy(a.name)})` : ""}${concernName ? ` untuk ${esc(concernName)}` : ""}. Satu klaim yang jelas justru lebih mudah dipasarkan.` });
+      }
+    }
+    if (r.ownSticker && !q.ownSticker) out.push({ tag: "🏷️ Sticker sendiri", why: `Cetak label di percetakan langganan — hemat ${rp(tierOf(r.qty).sticker)}/pcs.` });
+    if (r.ownPack && !q.ownPack) { const p0 = packsFor(r.b, r.v)[0]; out.push({ tag: "📦 Kemasan dari kamu", why: `Kirim kemasan ke pabrik — hemat ${p0 ? rp(packPrice(p0.id, r.qty)) : "biaya kemasan"}/pcs. Bisa beli grosir di supplier kemasan.` }); }
+    const t = tierOf(r.qty), ti = TIERS.indexOf(t);
+    if (ti > 0) out.push({ tag: `📈 Produksi ${r.qty.toLocaleString("id-ID")} pcs`, why: `Masuk harga tier ${tierLabel(t, ti)}${t.bpom ? "" : " — BPOM gratis"}. Makin banyak, makin murah per pcs.` });
     return out;
   }
 
@@ -340,7 +404,10 @@
         <tr><td>BPOM ${p.bpom ? "" : "(gratis) "}& Halal ÷ ${r.qty.toLocaleString("id-ID")} pcs</td><td>${rp(p.fees / r.qty)}</td></tr>
         <tr class="tot"><td>Total per pcs</td><td>${rp(p.allIn)}</td></tr>
       </table>
+      ${r.why && r.why.length ? `<div class="tp-why"><div class="tp-why-tags">${r.why.map((w) => `<span>${w.tag}</span>`).join("")}</div><ul>${r.why.map((w) => `<li>${w.why}</li>`).join("")}</ul></div>` : ""}
       ${r.note ? `<div class="tp-rec-note">${r.note}</div>` : ""}
+      ${r.alts && r.alts.length ? `<div class="tp-alts"><div class="small"><b>Opsi lain untuk produk ini</b></div>${r.alts.map((a, j) => `<button class="tp-alt" data-usealt="${i}:${j}">
+        <span class="t">${(() => { const w = explain(a, S.q); const act = w.find((x) => /^🧪/.test(x.tag)); return `${w.map((x) => x.tag).join(" · ") || "Sesuai pilihan"}${act ? `<small class="r">${act.why}</small>` : ""}`; })()}</span><span class="v">${rp(a.pr.allIn)}/pcs<small>${a.qty.toLocaleString("id-ID")} pcs · ${rp(a.pr.total)}</small></span></button>`).join("")}</div>` : ""}
       <div class="tp-rec-foot">
         ${r.fit ? `<div><b>Order ${r.qty.toLocaleString("id-ID")} pcs</b> · total ${rp(p.total)}</div>`
           : `<div class="flag small">Belum masuk budget, bahkan di ${MAXQ.toLocaleString("id-ID")} pcs</div>`}
@@ -352,57 +419,86 @@
   let lastRecs = [];
   function viewResults() {
     const q = S.q, X = Number(q.perPcs) || 0;
-    const main = recommend(q);
-    const fit = main.filter((r) => r.fit);
-    // Simulasi kedua: tanpa biaya kemasan & sticker (customer bawa sendiri)
-    let own = [];
-    if (!(q.ownPack && q.ownSticker)) {
-      const byBase = (list) => Object.fromEntries(list.map((r) => [r.b.id, r]));
-      const def = byBase(main);
-      const packOnly = q.ownPack ? {} : byBase(recommend({ ...q, ownPack: true }));
-      own = recommend({ ...q, ownPack: true, ownSticker: true }).filter((r) => r.fit).map((r) => {
-        const d0 = def[r.b.id];
-        if (d0 && d0.fit) {
-          r.note = `💡 Dibanding pakai kemasan & sticker MaklonGo: <b>${rp(d0.pr.allIn)} → ${rp(r.pr.allIn)}/pcs</b>${r.qty < d0.qty ? `, minimal order turun dari ${d0.qty.toLocaleString("id-ID")} ke <b>${r.qty.toLocaleString("id-ID")} pcs</b>` : ""}.`;
-          r.rank = 1;
-        } else {
-          const po = packOnly[r.b.id];
-          r.badge = "✅ Bisa masuk budget"; r.badgeCls = "ok";
-          r.note = po && po.fit
-            ? `✅ Masuk budget ${rp(X)}/pcs <b>cukup bawa kemasan sendiri</b>: order ${po.qty.toLocaleString("id-ID")} pcs, ${rp(po.pr.allIn)}/pcs (sticker dari MaklonGo). Kalau sticker juga dari kamu: cukup order <b>${r.qty.toLocaleString("id-ID")} pcs</b>, ${rp(r.pr.allIn)}/pcs.`
-            : `✅ Masuk budget ${rp(X)}/pcs <b>asal bawa kemasan & sticker sendiri</b>. Dengan kemasan & sticker MaklonGo belum masuk budget.`;
-          r.rank = 0;
-        }
-        return r;
-      }).sort((x, y) => (x.rank - y.rank) || (x.qty - y.qty) || (x.pr.allIn - y.pr.allIn));
+    const bases = basesPriced().filter((b) => b.cat === q.cat);
+    const plans = [];
+    const misses = [];
+    bases.forEach((b) => {
+      const exact = planFor(b, q, { noCompromise: true });
+      const flex = planFor(b, q);
+      // Yang sudah masuk budget tetap diberi opsi lain yang lebih hemat / cukup produksi lebih sedikit
+      if (exact && flex) exact.alts = diverse([flex, ...(flex.allAlts || [])].filter((c) => c.sig && (c.qty < exact.qty || c.pr.allIn < exact.pr.allIn - 500)));
+      const p = exact ? { ...exact, compromise: false } : flex;
+      if (p) { p.why = explain(p, q); p.compromise = !!(exact ? false : p.why.some((w) => !/^📈/.test(w.tag))); plans.push(p); }
+      else misses.push(b);
+    });
+    const direct = plans.filter((p) => !p.compromise).sort((x, y) => (x.qty - y.qty) || (y.d.actives.length - x.d.actives.length) || (x.pr.allIn - y.pr.allIn));
+    const adjusted = plans.filter((p) => p.compromise).sort((x, y) => (x.score - y.score) || (x.qty - y.qty));
+    direct.forEach((p, i) => { if (i === 0) p.badge = "⭐ Paling pas"; });
+    adjusted.forEach((p) => { p.badge = "🧠 Dengan penyesuaian"; p.badgeCls = "ok"; });
+    lastRecs = [...direct, ...adjusted];
+    // Jalan keluar jika ada base yang tetap belum masuk budget
+    const minFor = (b) => {
+      let m = null;
+      volsFor(b).filter((v) => FIXED_VOL[b.id] || v >= b.vol * 0.25).forEach((v) => {
+        const pr = priceOf({ baseId: b.id, vol: v, actives: [], pack: "own", sticker: "own" }, MAXQ);
+        if (!m || pr.allIn < m.allIn) m = { b, v, allIn: pr.allIn };
+      });
+      return m;
+    };
+    const cheapest = bases.map(minFor).filter(Boolean).sort((x, y) => x.allIn - y.allIn)[0];
+    const count = direct.length + adjusted.length;
+    const T = Number(q.total) || 0;
+    const notes = [];
+    const allPlans = [...direct, ...adjusted];
+    const smallest = allPlans.slice().sort((x, y) => x.qty - y.qty)[0];
+    if (count && !T && smallest && smallest.qty >= 5000) notes.push(`📦 Dengan ${rp(X)}/pcs, produksi paling sedikit <b>${smallest.qty.toLocaleString("id-ID")} pcs</b> (${esc(smallest.b.name)}, total ${rp(smallest.pr.total)}). Biaya BPOM & Halal per SKU jadi ringan jika dibagi ke banyak pcs. Isi <b>total budget</b> agar kami carikan jumlah yang realistis.`);
+    // Per pcs & total bertabrakan → tunjukkan apa yang bisa dengan total budget, dan total yang dibutuhkan untuk harga per pcs target
+    // Bukti formula: base yang sudah mengandung bahan untuk fokus manfaat klien
+    if (q.concern) {
+      const ok = bases.map((b) => ({ b, hit: baseSupports(b, q.concern).hit })).filter((x) => x.hit.length).sort((x, y) => y.hit.length - x.hit.length).slice(0, 3);
+      if (ok.length) notes.push(`🧪 <b>Tidak wajib tambah bahan aktif</b> — ${ok.map((x) => `${esc(x.b.name)} sudah mengandung ${x.hit.slice(0, 3).map((h) => `<b>${esc(h)}</b>`).join(", ")}`).join("; ")} untuk ${esc((IDX.activeCats[q.concern] || {}).name)}. Tanpa tambahan aktif, harga per pcs lebih ringan.`);
     }
-    lastRecs = [...main, ...own];
-    const shown = S.ui.showAll ? main : main.slice(0, 6);
-    const ownShown = S.ui.showAllOwn ? own : own.slice(0, 6);
-    const newly = own.filter((r) => r.rank === 0).length;
-    const best = fit[0] || main[0];
-    const tips = [];
-    if (best) {
-      if (!q.ownPack && best.pack) tips.push(`📦 <b>Bawa kemasan sendiri</b> → hemat ${rp(best.pr.pack)}/pcs untuk ${esc(best.b.name)}.`);
-      if (!q.ownSticker) tips.push(`🏷️ <b>Bawa sticker sendiri</b> → hemat ${rp(best.pr.sticker)}/pcs.`);
-      if (own.length) tips.push(`👇 <b>Simulasi tanpa kemasan & sticker</b> di bawah: ${own.length} produk masuk budget${newly ? `, termasuk <b>${newly} produk yang hanya masuk budget jika kemasan/sticker dari kamu</b>` : ""}.`);
-      tips.push(`📈 BPOM & Halal dibagi ke semua pcs, dan mulai 1.000 pcs <b>BPOM gratis</b>: ${[50, 100, 500, 1000].map((n) => `${n.toLocaleString("id-ID")} pcs = <b>${rp(feesOf(n) / n)}</b>/pcs`).join(" · ")}.`);
-      if (fit.length && fit[0].qty > WEBQ) tips.push(`🤝 Jumlah di atas ${WEBQ} pcs akan dibantu langsung oleh CS Business Development MaklonGo.`);
-      if (!fit.length) tips.unshift(`⚠️ Dengan kemasan & sticker dari MaklonGo, budget ${rp(X)}/pcs belum cukup bahkan untuk ${MAXQ.toLocaleString("id-ID")} pcs.${own.length ? " Lihat simulasi tanpa kemasan & sticker di bawah." : " Coba naikkan budget atau pilih volume lebih kecil."}`);
+    let byTotal = [];
+    if (!count && T) {
+      if (T < feesOf(MOQ) + 1) notes.push(`⚠️ Total ${rp(T)} belum menutup biaya wajib BPOM & Lab + Halal (${rp(feesOf(MOQ))} per SKU). Mulai dari <b>sample (${rp(PP.fees.sample)})</b> dulu sambil menyiapkan modal produksi.`);
+      byTotal = bases.map((b) => planFor(b, { ...q, perPcs: 1e9 })).filter(Boolean).sort((x, y) => x.pr.allIn - y.pr.allIn).slice(0, 3);
+      byTotal.forEach((p) => { p.why = explain(p, q); p.badge = "💡 Sesuai total budget"; p.badgeCls = "ok"; p.compromise = true; });
+      const need = bases.map((b) => planFor(b, { ...q, total: "" })).filter(Boolean).sort((x, y) => x.pr.total - y.pr.total)[0];
+      if (byTotal.length) notes.push(`🧮 Dengan total ${rp(T)}, BPOM & Halal (${rp(feesOf(MOQ))}/SKU) masih terasa besar per pcs. Yang bisa kamu buat: <b>${esc(byTotal[0].b.name)}</b> ${byTotal[0].qty.toLocaleString("id-ID")} pcs seharga ${rp(byTotal[0].pr.allIn)}/pcs — lihat di bawah.`);
+      if (need) notes.push(`🎯 Untuk mencapai ${rp(X)}/pcs, total budget yang dibutuhkan mulai <b>${rp(need.pr.total)}</b> (${esc(need.b.name)}, ${need.qty.toLocaleString("id-ID")} pcs).`);
     }
-    const ownSection = q.ownPack && q.ownSticker ? "" : `
-      <div class="tp-sim-head"><h2 class="tp-h" style="margin:0"><small>SIMULASI 2 · TANPA KEMASAN & STICKER</small>Kalau kemasan & sticker dari kamu</h2>
-        <p class="muted small" style="margin:4px 0 0">Harga di bawah hanya isi produk (base + bahan aktif) + BPOM & Halal. Kemasan & sticker kamu siapkan sendiri lalu dikirim ke pabrik.</p></div>
-      <div class="tp-recs">${ownShown.map((r, i) => recCard(r, main.length + i)).join("") || `<div class="card muted">Belum ada produk yang masuk budget ${rp(X)}/pcs walaupun tanpa kemasan & sticker. Coba naikkan budget atau pilih kategori lain.</div>`}</div>
-      ${own.length > ownShown.length ? `<button class="btn btn-ghost load-more" data-act="showallown">Tampilkan semua (${own.length})</button>` : ""}`;
-    return `<div class="row between" style="margin:18px 0 6px"><h2 class="tp-h" style="margin:0"><small>REKOMENDASI LINI PRODUKSI</small>Untuk budget ${rp(X)}/pcs</h2><button class="btn btn-ghost btn-sm" data-go="budget">← Ubah budget</button></div>
-      <p class="muted small">${esc((IDX.baseCats[q.cat] || {}).name || "")}${q.concern ? " · fokus " + esc((IDX.activeCats[q.concern] || {}).name) : ""}${q.total ? ` · total budget ${rp(q.total)}` : ""}${q.ownPack ? " · bawa kemasan sendiri" : ""}${q.ownSticker ? " · bawa sticker sendiri" : ""}. ${fit.length} dari ${main.length} base sesuai budget.</p>
-      ${tips.length ? `<div class="card tp-tips">${tips.map((t) => `<p>${t}</p>`).join("")}${nego()}</div>` : ""}
-      ${q.ownPack && q.ownSticker ? "" : `<div class="tp-sim-head"><h2 class="tp-h" style="margin:0"><small>SIMULASI 1 · LENGKAP</small>${q.ownPack ? "Sticker dari MaklonGo" : q.ownSticker ? "Kemasan dari MaklonGo" : "Dengan kemasan & sticker dari MaklonGo"}</h2></div>`}
-      <div class="tp-recs">${shown.map(recCard).join("") || '<div class="card muted">Belum ada base di kategori ini.</div>'}</div>
-      ${main.length > shown.length ? `<button class="btn btn-ghost load-more" data-act="showall">Tampilkan semua (${main.length})</button>` : ""}
-      ${ownSection}
-      <p class="small muted" style="margin-top:14px">Harga sudah termasuk bahan aktif dosis 1% per bahan. Belum termasuk ongkos kirim & sample. Harga final mengikuti invoice resmi setelah dicek admin.</p>`;
+    const sh = (list, key) => (S.ui[key] ? list : list.slice(0, 6));
+    const wa = (t) => window.MG.waLink(CFG.adminWhatsApp, t);
+    const ideas = [
+      `💬 <b>Nego langsung dengan admin</b> — harga bisa disesuaikan dengan rencana bisnismu. <a href="${wa(`Halo admin MaklonGo, budget saya ${rp(X)}/pcs untuk ${(IDX.baseCats[q.cat] || {}).name || "produk"}. Mohon dibantu opsi terbaiknya.`)}" target="_blank" rel="noopener">Chat admin →</a>`,
+      `🧴 <b>Mulai dari sample</b> (${rp(PP.fees.sample)} / SKU) untuk tes formula & pasar sebelum produksi massal.`,
+      `🎯 <b>Mulai 1 SKU dulu</b>: biaya BPOM & Halal per SKU jadi tidak berlipat. Tambah varian setelah produk pertama laku.`,
+      `🤝 <b>Patungan / pre-order</b>: kumpulkan pesanan reseller dulu agar jumlah produksi naik ke tier harga lebih murah.`,
+    ];
+    let html = `<div class="row between" style="margin:18px 0 6px"><h2 class="tp-h" style="margin:0"><small>PENASIHAT BUDGET MAKLONGO</small>Budget ${rp(X)}/pcs${q.total ? ` · total ${rp(q.total)}` : ""}</h2><button class="btn btn-ghost btn-sm" data-go="budget">← Ubah budget</button></div>
+      <div class="card tp-advisor">
+        <div class="adv-head"><span class="adv-ico">🧠</span><div>
+          <b>${count ? `Kabar baik! Ada ${count} produk ${esc(((IDX.baseCats[q.cat] || {}).name || "").toLowerCase())} yang bisa kamu buat dengan budget ini.` : `Budget ${rp(X)}/pcs masih bisa diwujudkan — ini caranya.`}</b>
+          <div class="small muted">${direct.length} langsung masuk budget${adjusted.length ? ` · ${adjusted.length} masuk budget dengan sedikit penyesuaian (kami jelaskan alasannya)` : ""}${q.concern ? ` · fokus ${esc((IDX.activeCats[q.concern] || {}).name)}` : ""}.</div></div></div>
+        ${notes.map((n) => `<div class="tp-rec-note">${n}</div>`).join("")}
+        ${!count && !T && cheapest ? `<div class="tp-rec-note">Budget minimal di kategori ini mulai <b>${rp(Math.ceil(cheapest.allIn / 100) * 100)}/pcs</b> (${esc(cheapest.b.name)} ${vlabel(cheapest.v)} ${cheapest.b.unit}, kemasan & sticker dari kamu, ${MAXQ.toLocaleString("id-ID")} pcs). Naikkan sedikit budget atau diskusikan dengan admin.</div>` : ""}
+        <div class="adv-ideas">${ideas.map((t) => `<p>${t}</p>`).join("")}</div>
+      </div>`;
+    html += `<div class="tp-sim-head"><h2 class="tp-h" style="margin:0"><small>LANGSUNG MASUK BUDGET</small>Sesuai pilihanmu${q.concern ? ` (2 bahan aktif ${esc((IDX.activeCats[q.concern] || {}).name)})` : ""}${q.ownPack ? " · kemasan sendiri" : ""}${q.ownSticker ? " · sticker sendiri" : ""}</h2></div>
+      <div class="tp-recs">${sh(direct, "showAll").map((r, i) => recCard(r, i)).join("") || `<div class="card muted">Belum ada yang masuk tanpa penyesuaian${count ? " — lihat rekomendasi dengan penyesuaian di bawah 👇" : "."}</div>`}</div>
+      ${direct.length > 6 && !S.ui.showAll ? `<button class="btn btn-ghost load-more" data-act="showall">Tampilkan semua (${direct.length})</button>` : ""}`;
+    if (byTotal.length) {
+      const off = lastRecs.length; lastRecs.push(...byTotal);
+      html += `<div class="tp-sim-head"><h2 class="tp-h" style="margin:0"><small>SESUAI TOTAL BUDGET ${rp(T)}</small>Yang bisa kamu produksi sekarang</h2></div>
+        <div class="tp-recs">${byTotal.map((r, i) => recCard(r, off + i)).join("")}</div>`;
+    }
+    if (adjusted.length) html += `<div class="tp-sim-head"><h2 class="tp-h" style="margin:0"><small>MASUK BUDGET DENGAN PENYESUAIAN</small>Rekomendasi pintar untuk produk lainnya</h2>
+        <p class="muted small" style="margin:4px 0 0">Kami cari kombinasi dengan kompromi paling kecil: mengurangi bahan aktif yang fungsinya sudah ada di base, ukuran trial size, sticker atau kemasan dari kamu, atau jumlah produksi yang lebih hemat.</p></div>
+      <div class="tp-recs">${sh(adjusted, "showAllOwn").map((r, i) => recCard(r, direct.length + i)).join("")}</div>
+      ${adjusted.length > 6 && !S.ui.showAllOwn ? `<button class="btn btn-ghost load-more" data-act="showallown">Tampilkan semua (${adjusted.length})</button>` : ""}`;
+    if (misses.length && count) html += `<p class="small muted" style="margin-top:12px">Belum masuk budget walau sudah disesuaikan: ${misses.map((b) => esc(b.name)).join(", ")}. Untuk produk ini, diskusikan dengan admin.</p>`;
+    html += `${nego()}<p class="small muted" style="margin-top:14px">Harga sudah termasuk bahan aktif dosis 1% per bahan, BPOM & Halal. Belum termasuk ongkos kirim & sample. Harga final mengikuti invoice resmi setelah dicek admin.</p>`;
+    return html;
   }
 
   /* ---------- perakit (builder) */
@@ -660,6 +756,7 @@
     if (ds.qcat) { S.q.cat = ds.qcat; persist(); return rerenderBuild(); }
     if (ds.qconcern !== undefined) { S.q.concern = ds.qconcern; persist(); return rerenderBuild(); }
     if (ds.userec) return useRec(lastRecs[+ds.userec]);
+    if (ds.usealt) { const [i, j] = ds.usealt.split(":").map(Number); return useRec(lastRecs[i].alts[j]); }
     if (ds.pickcat) { S.ui.pickCat = ds.pickcat; return rerenderBuild(); }
     if (ds.pickbase) return pickBase(ds.pickbase);
     if (ds.bvar) { d.variant = ds.bvar; persist(); return rerenderBuild(); }
