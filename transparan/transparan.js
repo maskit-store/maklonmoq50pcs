@@ -354,7 +354,7 @@
       `<button class="chip ${q.concern === c.id ? "active" : ""}" data-qconcern="${c.id}">${esc(c.name)}</button>`).join("");
     return `<div class="tp-narrow">
       <h2 class="tp-h"><small>RUANG PERENCANAAN</small>Cari produk dari budget</h2>
-      <p class="muted">Isi budget per pcs (sudah termasuk biaya BPOM & Halal yang dibagi ke semua pcs). Kami hitung kombinasi dan jumlah order yang paling pas.</p>
+      <p class="muted">Isi budget per pcs dan beri tahu apakah sudah termasuk biaya BPOM & Halal. Kami carikan kombinasi formula, kemasan dan jumlah produksi yang paling pas.</p>
       <div class="card">
         <div class="field"><label>1. Kategori produk</label><div class="chips" style="margin:0">${cats}</div></div>
         <div class="field"><label for="qPer">2. Budget per pcs (Rp) <span class="req">*</span></label>
