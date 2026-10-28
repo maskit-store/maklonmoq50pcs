@@ -273,3 +273,17 @@ body.tp .pack .vol { background: var(--slate); color: var(--accent); font-family
 .tp-feetag { display: inline-block; vertical-align: middle; font-family: var(--mono); font-size: 11px; font-weight: 700; background: var(--accent-soft); color: #6b4c00; border: 1px dashed #e8c76a; border-radius: 6px; padding: 3px 7px; margin-left: 6px; }
 #f-fees .err { color: var(--danger); font-size: 12.5px; margin-top: 4px; }
 #f-fees.invalid .tp-act { border-color: var(--danger); }
+/* konfirmasi: nomor order + gambar rincian */
+.tp-sent { display: grid; gap: 18px; grid-template-columns: minmax(0, 1fr); margin: 20px 0 30px; align-items: start; }
+@media (min-width: 960px) { .tp-sent { grid-template-columns: minmax(0, 1fr) 420px; } }
+.sent-no { display: flex; align-items: center; gap: 12px; background: linear-gradient(160deg, var(--slate-2), var(--slate)); color: #fff; border-radius: 12px; padding: 14px 16px; margin-bottom: 16px; }
+.sent-no small { font-family: var(--mono); color: var(--accent); font-size: 11px; letter-spacing: .14em; display: block; }
+.sent-no b { font-family: var(--mono); font-size: clamp(20px, 5vw, 28px); letter-spacing: .04em; flex: 1; }
+.sent-no .btn { background: rgba(255,255,255,.1); color: #fff; border-color: rgba(255,255,255,.25); }
+.sent-opts { display: grid; gap: 12px; }
+@media (min-width: 640px) { .sent-opts { grid-template-columns: 1fr 1fr; } }
+.sent-opt { display: flex; gap: 12px; border: 1px solid var(--line); border-radius: 12px; padding: 14px; background: #f8fafb; }
+.sent-opt > div:last-child { flex: 1; min-width: 0; }
+.sent-opt p { margin: 4px 0 10px; }
+.sent-img img { width: 100%; border-radius: 12px; border: 1px solid var(--line); box-shadow: 0 10px 30px rgba(13,27,30,.12); background: #fff; min-height: 300px; display: block; }
+.sent-img img.loading { animation: fxLed 1.2s steps(2) infinite; }

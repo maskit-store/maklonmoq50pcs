@@ -182,7 +182,7 @@
   const S = Object.assign({ view: "home", q: { cat: "face", perPcs: "", total: "", concern: "", ownPack: false, ownSticker: false }, d: emptyDraft(), cart: [], customer: {}, profile: null, ui: {} },
     store.get("mgt_state", {}));
   S.ui = { actCat: "all", packAll: false, packLimit: 12, showAll: false, showAllOwn: false };
-  const persist = () => store.set("mgt_state", { view: S.view, q: S.q, d: S.d, cart: S.cart, customer: S.customer, profile: S.profile });
+  const persist = () => store.set("mgt_state", { view: S.view, q: S.q, d: S.d, cart: S.cart, customer: S.customer, profile: S.profile, lastOrder: S.lastOrder });
   S.reg = { step: "form", busy: false, err: "", info: "" };
   const registered = () => !!(S.profile && S.profile.done && S.profile.token && PP);
   const go = (v) => { S.view = v; persist(); render(); scrollTo({ top: 0 }); };
@@ -655,8 +655,28 @@
   }
 
   function viewSent() {
-    return `<div class="tp-narrow card" style="margin-top:24px;text-align:center"><h2>Permintaan penawaran terkirim 🎉</h2><p class="muted">No. order <b>${esc(S.lastId || "")}</b>. Admin akan mengirim invoice & MoU melalui WhatsApp.</p>
-      <button class="btn btn-ghost" data-go="home">Kembali ke awal</button></div>`;
+    const o = S.lastOrder;
+    if (!o) return `<div class="tp-narrow card" style="margin-top:24px;text-align:center"><h2>Permintaan penawaran terkirim 🎉</h2><p class="muted">No. order <b>${esc(S.lastId || "")}</b>.</p><button class="btn btn-ghost" data-go="home">Kembali ke awal</button></div>`;
+    const who = o.big ? "tim Business Development" : "CS";
+    setTimeout(renderOrderImage, 0);
+    return `<div class="tp-sent">
+      <div class="card sent-main">
+        <span class="fx-tag" style="color:#166534;background:#dcfce7;border-color:#86efac">● PERMINTAAN TERCATAT</span>
+        <h2 style="margin:12px 0 4px">Permintaan penawaran terkirim 🎉</h2>
+        <p class="muted" style="margin:0 0 14px">Simpan nomor order ini. Langkah terakhir: konfirmasi ke WhatsApp ${who} MaklonGo dengan salah satu cara di bawah.</p>
+        <div class="sent-no"><small>NO. ORDER</small><b>${esc(o.id)}</b><button class="btn btn-ghost btn-sm" data-act="copyid">Salin</button></div>
+        <div class="sent-opts">
+          <div class="sent-opt"><div class="st-no">1</div><div><b>Sebutkan nomor order</b><p class="small muted">Kirim pesan singkat berisi nomor order. ${who[0].toUpperCase() + who.slice(1)} langsung menemukan rincianmu di sistem.</p>
+            <a class="btn btn-primary btn-block" href="${window.MG.waLink(csWa(o), shortMsg(o))}" target="_blank" rel="noopener">💬 Konfirmasi via WhatsApp (No. Order)</a></div></div>
+          <div class="sent-opt"><div class="st-no">2</div><div><b>Kirim rincian order (gambar JPG)</b><p class="small muted">Gambar rincian lengkap dengan harga, siap dikirim ke WhatsApp ${who}.</p>
+            <button class="btn btn-primary btn-block" data-act="shareimg">📤 Kirim gambar ke WhatsApp</button>
+            <button class="btn btn-ghost btn-block" data-act="saveimg" style="margin-top:8px">⬇️ Simpan rincian (JPG)</button></div></div>
+        </div>
+        ${nego()}
+        <div class="row" style="margin-top:14px"><button class="btn btn-ghost" data-start-build>+ Rancang produk lain</button><button class="btn btn-ghost" data-go="home">Kembali ke awal</button></div>
+      </div>
+      <div class="sent-img"><img id="orderImg" class="loading" alt="Rincian order ${esc(o.id)}"><p class="small muted" style="text-align:center">Pratinjau gambar · di HP bisa tekan lama untuk menyimpan</p></div>
+    </div>`;
   }
 
   function render() {
@@ -750,10 +770,110 @@
       L.push(`• Harga produksi: ${rp(p.unit)}/pcs × ${d.qty} = ${rp(p.unit * d.qty)}`, `• Total SKU (incl. BPOM & Halal${d.sample ? " & sample" : ""}): ${rp(p.total)}`);
     });
     L.push("", `*Estimasi total: ${rp(grand)}* (belum termasuk ongkir)`, "Saya ingin diskusi / nego harga dan dibuatkan invoice & MoU. Terima kasih 🙏");
-    const wa = window.MG.waLink(big ? BD_WA : CFG.adminWhatsApp, L.join("\n"));
     recordOrder(id, c);
+    // Simpan ringkasan untuk halaman konfirmasi (nomor order + gambar rincian JPG)
+    S.lastOrder = { id, createdAt: new Date().toISOString(), big, grand, text: L.join("\n"), feesIncl: inclFees(),
+      customer: { name: c.name, phone: c.phone, email: c.email, ig: c.ig, city: c.city, brand: c.brand },
+      items: S.cart.map((d) => ({ ...d })) };
     S.lastId = id; S.cart = []; go("sent");
-    const w = window.open(wa, "_blank"); if (!w) location.href = wa;
+  }
+
+  /* ---------- konfirmasi: nomor order & gambar rincian (JPG) */
+  const csWa = (o) => (o.big ? BD_WA : CFG.adminWhatsApp);
+  const shortMsg = (o) => `Halo ${o.big ? "tim Business Development" : "admin"} MaklonGo 👋\nSaya ingin konfirmasi permintaan penawaran:\n\n*No. Order: ${o.id}*\nNama: ${o.customer.name}\nBrand: ${o.customer.brand}\nEstimasi: ${rp(o.grand)} (${o.items.length} SKU)\n\nMohon dibantu penawaran resminya. Terima kasih 🙏`;
+  function orderImage(o) {
+    return new Promise((resolve) => {
+      const W = 1080, P = 56, cv = document.createElement("canvas"), x = cv.getContext("2d");
+      const F = (w, sz, fam = "Plus Jakarta Sans") => `${w} ${sz}px "${fam}", Arial, sans-serif`;
+      const wrap = (t, maxW, font) => { x.font = font; const out = []; String(t).split("\n").forEach((para) => { let line = ""; para.split(" ").forEach((w) => { const tt = line ? line + " " + w : w; if (x.measureText(tt).width > maxW && line) { out.push(line); line = w; } else line = tt; }); out.push(line); }); return out; };
+      // Susun baris dulu untuk menghitung tinggi gambar
+      const rows = [];
+      const add = (kind, a, b) => rows.push({ kind, a, b });
+      o.items.forEach((d, i) => {
+        const b = IDX.bases[d.baseId] || {}, p = priceOf(d), pk = IDX.packaging[d.pack];
+        add("sku", `SKU ${i + 1} · ${d.productName || b.name}`, `${vlabel(d.vol)} ${b.unit} × ${Number(d.qty).toLocaleString("id-ID")} pcs`);
+        add("line", `Base ${b.name}${d.variant ? " (" + d.variant + ")" : ""}`, rp(p.base));
+        p.acts.forEach((a) => add("line", `+ ${a.name} (1%)`, rp(a.v)));
+        add("line", `Kemasan ${pk ? pk.code + " " + pk.name : d.pack === "own" ? "(bawa sendiri)" : "(dicarikan admin)"}`, d.pack === "admin" ? "menyusul" : rp(p.pack));
+        add("line", `Sticker ${d.sticker === "own" ? "(bawa sendiri)" : ""}`, rp(p.sticker));
+        add("sub", "Harga produksi / pcs", rp(p.unit));
+        add("line", `BPOM & Lab${p.bpom ? "" : " (gratis ≥ 1.000 pcs)"} + Halal / SKU`, rp(p.fees));
+        if (p.sample) add("line", "Sample (incl. PPN)", rp(p.sample));
+        add("tot", `Total SKU ${i + 1}`, rp(p.total));
+        add("gap");
+      });
+      const lineH = { sku: 54, line: 40, sub: 46, tot: 50, gap: 22 };
+      const H = 430 + rows.reduce((s, r) => s + lineH[r.kind], 0) + 330;
+      cv.width = W; cv.height = H;
+      const draw = (logo) => {
+        x.fillStyle = "#eef2f3"; x.fillRect(0, 0, W, H);
+        // kertas work order
+        x.fillStyle = "#fff"; x.fillRect(24, 24, W - 48, H - 48);
+        // header
+        x.fillStyle = "#ffffff"; x.fillRect(24, 24, W - 48, 120);
+        if (logo) x.drawImage(logo, P, 52, 280, 280 * logo.height / logo.width);
+        x.textAlign = "right"; x.fillStyle = "#0a8a86"; x.font = F(800, 30); x.fillText("PERMINTAAN PENAWARAN", W - P, 82);
+        x.fillStyle = "#5d6f76"; x.font = F(500, 22); x.fillText(new Date(o.createdAt).toLocaleString("id-ID", { day: "2-digit", month: "long", year: "numeric", hour: "2-digit", minute: "2-digit" }), W - P, 116);
+        // garis safety
+        for (let i = 0; i < W - 48; i += 28) { x.fillStyle = (i / 28) % 2 ? "#0d1b1e" : "#f4c24f"; x.beginPath(); x.moveTo(24 + i, 144); x.lineTo(24 + i + 14, 144); x.lineTo(24 + i + 28, 156); x.lineTo(24 + i + 14, 156); x.fill(); }
+        // nomor order
+        x.fillStyle = "#0d1b1e"; x.fillRect(P, 182, W - 2 * P, 110);
+        x.textAlign = "left"; x.fillStyle = "#f4c24f"; x.font = F(700, 20, "JetBrains Mono"); x.fillText("NO. ORDER", P + 28, 220);
+        x.fillStyle = "#fff"; x.font = F(700, 46, "JetBrains Mono"); x.fillText(o.id, P + 28, 272);
+        // customer
+        x.fillStyle = "#14232a"; x.font = F(700, 24);
+        x.fillText(`${o.customer.name} · ${o.customer.brand}`, P, 336);
+        x.fillStyle = "#5d6f76"; x.font = F(500, 21);
+        x.fillText([`+${o.customer.phone}`, o.customer.email, o.customer.ig, o.customer.city].filter(Boolean).join(" · "), P, 368);
+        let y = 420;
+        rows.forEach((r) => {
+          if (r.kind === "gap") { y += lineH.gap; return; }
+          if (r.kind === "sku") { x.fillStyle = "#e0f5f3"; x.fillRect(P, y - 36, W - 2 * P, 48); x.fillStyle = "#0a5a57"; x.font = F(800, 24); x.textAlign = "left"; x.fillText(r.a, P + 14, y - 4); x.textAlign = "right"; x.font = F(700, 22, "JetBrains Mono"); x.fillText(r.b, W - P - 14, y - 4); y += lineH.sku; return; }
+          if (r.kind === "sub" || r.kind === "tot") { x.strokeStyle = "#d5dfe2"; x.setLineDash([6, 6]); x.beginPath(); x.moveTo(P, y - 30); x.lineTo(W - P, y - 30); x.stroke(); x.setLineDash([]); }
+          const isTot = r.kind === "tot";
+          x.fillStyle = isTot ? "#0a8a86" : "#14232a"; x.font = F(r.kind === "line" ? 500 : 800, isTot ? 26 : 22);
+          x.textAlign = "left"; let a = r.a; const maxW = W - 2 * P - 260; while (x.measureText(a).width > maxW && a.length > 4) a = a.slice(0, -2); if (a !== r.a) a += "…";
+          x.fillText(a, P + 14, y); x.textAlign = "right"; x.font = F(700, isTot ? 26 : 22, "JetBrains Mono"); x.fillText(r.b, W - P - 14, y);
+          y += lineH[r.kind];
+        });
+        // grand total
+        y += 10; x.fillStyle = "#0d1b1e"; x.fillRect(P, y, W - 2 * P, 84);
+        x.textAlign = "left"; x.fillStyle = "#fff"; x.font = F(700, 24); x.fillText("ESTIMASI TOTAL", P + 24, y + 52);
+        x.textAlign = "right"; x.fillStyle = "#f4c24f"; x.font = F(800, 38, "JetBrains Mono"); x.fillText(rp(o.grand), W - P - 24, y + 56);
+        y += 120;
+        x.textAlign = "left"; x.fillStyle = "#5d6f76";
+        wrap(`Belum termasuk ongkos kirim. Harga estimasi — bisa nego & didiskusikan dengan tim Business Development MaklonGo. DP 50%, pelunasan + ongkir setelah NIE BPOM terbit.`, W - 2 * P, F(500, 20)).forEach((l) => { x.font = F(500, 20); x.fillText(l, P, y); y += 30; });
+        y += 14; x.fillStyle = "#0a8a86"; x.font = F(700, 22);
+        x.fillText(`Konfirmasi ke WhatsApp ${o.big ? "Business Development" : "CS"} MaklonGo: +${csWa(o)}`, P, y);
+        cv.toBlob((blob) => resolve({ blob, url: URL.createObjectURL(blob) }), "image/jpeg", 0.92);
+      };
+      const ready = document.fonts && document.fonts.ready ? document.fonts.ready : Promise.resolve();
+      ready.then(() => { const img = new Image(); img.onload = () => draw(img); img.onerror = () => draw(null); img.src = ROOT + "assets/img/logo.png"; });
+    });
+  }
+  let orderImg = null;
+  function renderOrderImage() {
+    const o = S.lastOrder; if (!o) return;
+    if (orderImg && orderImg.id === o.id) { const el = document.getElementById("orderImg"); if (el) el.src = orderImg.url; return; }
+    orderImage(o).then((r) => { orderImg = { ...r, id: o.id }; const el = document.getElementById("orderImg"); if (el) { el.src = r.url; el.classList.remove("loading"); } });
+  }
+  const imgName = (o) => `Penawaran-${o.id}.jpg`;
+  function saveImage() {
+    const o = S.lastOrder; if (!orderImg) return toast("Gambar masih disiapkan…");
+    const a = document.createElement("a"); a.href = orderImg.url; a.download = imgName(o); document.body.appendChild(a); a.click(); a.remove();
+    toast("Rincian order tersimpan (JPG)");
+  }
+  async function shareImage() {
+    const o = S.lastOrder; if (!orderImg) return toast("Gambar masih disiapkan…");
+    const file = new File([orderImg.blob], imgName(o), { type: "image/jpeg" });
+    const text = `Halo, berikut rincian permintaan penawaran saya. No. Order: ${o.id}`;
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      try { await navigator.share({ files: [file], text }); return; } catch (e) { if (e && e.name === "AbortError") return; }
+    }
+    // Komputer: simpan JPG lalu buka WhatsApp untuk dilampirkan
+    saveImage();
+    const wa = window.MG.waLink(csWa(o), `${text}\n(gambar rincian order saya lampirkan)`);
+    setTimeout(() => { const w = window.open(wa, "_blank"); if (!w) location.href = wa; }, 400);
   }
 
   document.getElementById("waFloat").href = window.MG.waLink(CFG.adminWhatsApp, "Halo admin MaklonGo, saya ingin tanya tentang maklon (web harga transparan).");
@@ -800,6 +920,9 @@
       case "morepack": S.ui.packLimit += 24; return rerenderBuild();
       case "savesku": return saveSku();
       case "send": return send();
+      case "saveimg": return saveImage();
+      case "shareimg": return shareImage();
+      case "copyid": navigator.clipboard && navigator.clipboard.writeText(S.lastOrder.id).then(() => toast("Nomor order disalin")); return;
       case "regsubmit": return regSubmit();
       case "otpverify": return otpVerify();
       case "otpresend": return otpResend();
@@ -823,7 +946,7 @@
     if (t.id === "otpCode" && t.value.replace(/\D/g, "").length === 6 && !S.reg.busy) otpVerify();
   });
 
-  if (!["home", "budget", "results", "build", "cart", "customer"].includes(S.view)) S.view = "home";
+  if (!["home", "budget", "results", "build", "cart", "customer", "sent"].includes(S.view)) S.view = "home";
   flushPending();
   addEventListener("online", flushPending);
   if (S.profile && S.profile.done && S.profile.token) {
