@@ -97,7 +97,7 @@
         const fit = !!qty;
         const pq = qty || MAXQ;
         const pr = priceOf(d, pq);
-        cands.push({ b, v, pack, d, qty: pq, pr, fit, dist: Math.abs(Math.log(v / b.vol)) });
+        cands.push({ b, v, pack, d, qty: pq, pr, fit, dist: Math.abs(Math.log(v / b.vol)), ownPack: !!q.ownPack, ownSticker: !!q.ownSticker });
       });
       if (!cands.length) return;
       cands.sort((x, y) => (y.fit - x.fit) || (x.dist - y.dist) || (x.qty - y.qty) || (x.pr.unit - y.pr.unit));
@@ -111,7 +111,7 @@
   const emptyDraft = () => ({ baseId: null, variant: "", vol: null, qty: MOQ, actives: [], pack: null, sticker: "ours", sample: false, productName: "", editIndex: null });
   const S = Object.assign({ view: "home", q: { cat: "face", perPcs: "", total: "", concern: "", ownPack: false, ownSticker: false }, d: emptyDraft(), cart: [], customer: {}, profile: null, ui: {} },
     store.get("mgt_state", {}));
-  S.ui = { actCat: "all", packAll: false, packLimit: 12, showAll: false };
+  S.ui = { actCat: "all", packAll: false, packLimit: 12, showAll: false, showAllOwn: false };
   const persist = () => store.set("mgt_state", { view: S.view, q: S.q, d: S.d, cart: S.cart, customer: S.customer, profile: S.profile });
   S.reg = { step: "form", busy: false, err: "", info: "" };
   const registered = () => !!(S.profile && S.profile.done && S.profile.token && PP);
@@ -322,17 +322,17 @@
   }
 
   function recCard(r, i) {
-    const q = S.q, p = r.pr, d = { ...r.d, qty: r.qty };
+    const p = r.pr, d = { ...r.d, qty: r.qty };
     const lines = [
       [`Base · ${esc(r.b.name)} ${vlabel(r.v)} ${r.b.unit}`, p.base],
       ...p.acts.map((a) => [`+ ${esc(a.name)} (1%)`, a.v]),
       [r.pack ? `Kemasan · ${esc(r.pack.code)} ${esc(r.pack.name)}` : "Kemasan · bawa sendiri", p.pack],
-      [q.ownSticker ? "Sticker · bawa sendiri" : "Sticker / label", p.sticker],
+      [r.ownSticker ? "Sticker · bawa sendiri" : "Sticker / label", p.sticker],
     ];
     return `<div class="tp-rec ${r.fit ? "" : "nofit"}">
       <div class="tp-rec-head">
-        <img src="${img(r.pack ? r.pack.img : null)}" alt="" loading="lazy">
-        <div><span class="badge">${i === 0 && r.fit ? "⭐ Paling pas" : esc((IDX.baseCats[r.b.cat] || {}).name || "")}</span>
+        ${r.pack ? `<img src="${img(r.pack.img)}" alt="" loading="lazy">` : '<span class="tp-ownpack">📦<small>kemasan<br>kamu</small></span>'}
+        <div><span class="badge ${r.badgeCls || ""}">${r.badge || (i === 0 && r.fit ? "⭐ Paling pas" : esc((IDX.baseCats[r.b.cat] || {}).name || ""))}</span>
           <h3>${esc(r.b.name)}</h3><div class="small muted">${esc(r.b.form)} · ${vlabel(r.v)} ${r.b.unit}${r.b.actives && r.b.actives.length ? " · sudah mengandung " + esc(r.b.actives.slice(0, 3).join(", ")) : ""}</div></div>
       </div>
       <table class="tp-lines">${lines.map(([n, v]) => `<tr><td>${n}</td><td>${rp(v)}</td></tr>`).join("")}
@@ -340,6 +340,7 @@
         <tr><td>BPOM ${p.bpom ? "" : "(gratis) "}& Halal ÷ ${r.qty.toLocaleString("id-ID")} pcs</td><td>${rp(p.fees / r.qty)}</td></tr>
         <tr class="tot"><td>Total per pcs</td><td>${rp(p.allIn)}</td></tr>
       </table>
+      ${r.note ? `<div class="tp-rec-note">${r.note}</div>` : ""}
       <div class="tp-rec-foot">
         ${r.fit ? `<div><b>Order ${r.qty.toLocaleString("id-ID")} pcs</b> · total ${rp(p.total)}</div>`
           : `<div class="flag small">Belum masuk budget, bahkan di ${MAXQ.toLocaleString("id-ID")} pcs</div>`}
@@ -351,23 +352,56 @@
   let lastRecs = [];
   function viewResults() {
     const q = S.q, X = Number(q.perPcs) || 0;
-    lastRecs = recommend(q);
-    const fit = lastRecs.filter((r) => r.fit);
-    const shown = S.ui.showAll ? lastRecs : lastRecs.slice(0, 6);
-    const best = fit[0] || lastRecs[0];
+    const main = recommend(q);
+    const fit = main.filter((r) => r.fit);
+    // Simulasi kedua: tanpa biaya kemasan & sticker (customer bawa sendiri)
+    let own = [];
+    if (!(q.ownPack && q.ownSticker)) {
+      const byBase = (list) => Object.fromEntries(list.map((r) => [r.b.id, r]));
+      const def = byBase(main);
+      const packOnly = q.ownPack ? {} : byBase(recommend({ ...q, ownPack: true }));
+      own = recommend({ ...q, ownPack: true, ownSticker: true }).filter((r) => r.fit).map((r) => {
+        const d0 = def[r.b.id];
+        if (d0 && d0.fit) {
+          r.note = `💡 Dibanding pakai kemasan & sticker MaklonGo: <b>${rp(d0.pr.allIn)} → ${rp(r.pr.allIn)}/pcs</b>${r.qty < d0.qty ? `, minimal order turun dari ${d0.qty.toLocaleString("id-ID")} ke <b>${r.qty.toLocaleString("id-ID")} pcs</b>` : ""}.`;
+          r.rank = 1;
+        } else {
+          const po = packOnly[r.b.id];
+          r.badge = "✅ Bisa masuk budget"; r.badgeCls = "ok";
+          r.note = po && po.fit
+            ? `✅ Masuk budget ${rp(X)}/pcs <b>cukup bawa kemasan sendiri</b>: order ${po.qty.toLocaleString("id-ID")} pcs, ${rp(po.pr.allIn)}/pcs (sticker dari MaklonGo). Kalau sticker juga dari kamu: cukup order <b>${r.qty.toLocaleString("id-ID")} pcs</b>, ${rp(r.pr.allIn)}/pcs.`
+            : `✅ Masuk budget ${rp(X)}/pcs <b>asal bawa kemasan & sticker sendiri</b>. Dengan kemasan & sticker MaklonGo belum masuk budget.`;
+          r.rank = 0;
+        }
+        return r;
+      }).sort((x, y) => (x.rank - y.rank) || (x.qty - y.qty) || (x.pr.allIn - y.pr.allIn));
+    }
+    lastRecs = [...main, ...own];
+    const shown = S.ui.showAll ? main : main.slice(0, 6);
+    const ownShown = S.ui.showAllOwn ? own : own.slice(0, 6);
+    const newly = own.filter((r) => r.rank === 0).length;
+    const best = fit[0] || main[0];
     const tips = [];
     if (best) {
       if (!q.ownPack && best.pack) tips.push(`📦 <b>Bawa kemasan sendiri</b> → hemat ${rp(best.pr.pack)}/pcs untuk ${esc(best.b.name)}.`);
       if (!q.ownSticker) tips.push(`🏷️ <b>Bawa sticker sendiri</b> → hemat ${rp(best.pr.sticker)}/pcs.`);
+      if (own.length) tips.push(`👇 <b>Simulasi tanpa kemasan & sticker</b> di bawah: ${own.length} produk masuk budget${newly ? `, termasuk <b>${newly} produk yang hanya masuk budget jika kemasan/sticker dari kamu</b>` : ""}.`);
       tips.push(`📈 BPOM & Halal dibagi ke semua pcs, dan mulai 1.000 pcs <b>BPOM gratis</b>: ${[50, 100, 500, 1000].map((n) => `${n.toLocaleString("id-ID")} pcs = <b>${rp(feesOf(n) / n)}</b>/pcs`).join(" · ")}.`);
       if (fit.length && fit[0].qty > WEBQ) tips.push(`🤝 Jumlah di atas ${WEBQ} pcs akan dibantu langsung oleh CS Business Development MaklonGo.`);
-      if (!fit.length) tips.unshift(`⚠️ Budget ${rp(X)}/pcs belum cukup, bahkan untuk ${MAXQ.toLocaleString("id-ID")} pcs. Coba naikkan budget, pilih volume lebih kecil, atau bawa kemasan/sticker sendiri.`);
+      if (!fit.length) tips.unshift(`⚠️ Dengan kemasan & sticker dari MaklonGo, budget ${rp(X)}/pcs belum cukup bahkan untuk ${MAXQ.toLocaleString("id-ID")} pcs.${own.length ? " Lihat simulasi tanpa kemasan & sticker di bawah." : " Coba naikkan budget atau pilih volume lebih kecil."}`);
     }
+    const ownSection = q.ownPack && q.ownSticker ? "" : `
+      <div class="tp-sim-head"><h2 class="tp-h" style="margin:0"><small>SIMULASI 2 · TANPA KEMASAN & STICKER</small>Kalau kemasan & sticker dari kamu</h2>
+        <p class="muted small" style="margin:4px 0 0">Harga di bawah hanya isi produk (base + bahan aktif) + BPOM & Halal. Kemasan & sticker kamu siapkan sendiri lalu dikirim ke pabrik.</p></div>
+      <div class="tp-recs">${ownShown.map((r, i) => recCard(r, main.length + i)).join("") || `<div class="card muted">Belum ada produk yang masuk budget ${rp(X)}/pcs walaupun tanpa kemasan & sticker. Coba naikkan budget atau pilih kategori lain.</div>`}</div>
+      ${own.length > ownShown.length ? `<button class="btn btn-ghost load-more" data-act="showallown">Tampilkan semua (${own.length})</button>` : ""}`;
     return `<div class="row between" style="margin:18px 0 6px"><h2 class="tp-h" style="margin:0"><small>REKOMENDASI LINI PRODUKSI</small>Untuk budget ${rp(X)}/pcs</h2><button class="btn btn-ghost btn-sm" data-go="budget">← Ubah budget</button></div>
-      <p class="muted small">${esc((IDX.baseCats[q.cat] || {}).name || "")}${q.concern ? " · fokus " + esc((IDX.activeCats[q.concern] || {}).name) : ""}${q.total ? ` · total budget ${rp(q.total)}` : ""}${q.ownPack ? " · bawa kemasan sendiri" : ""}${q.ownSticker ? " · bawa sticker sendiri" : ""}. ${fit.length} dari ${lastRecs.length} base sesuai budget.</p>
+      <p class="muted small">${esc((IDX.baseCats[q.cat] || {}).name || "")}${q.concern ? " · fokus " + esc((IDX.activeCats[q.concern] || {}).name) : ""}${q.total ? ` · total budget ${rp(q.total)}` : ""}${q.ownPack ? " · bawa kemasan sendiri" : ""}${q.ownSticker ? " · bawa sticker sendiri" : ""}. ${fit.length} dari ${main.length} base sesuai budget.</p>
       ${tips.length ? `<div class="card tp-tips">${tips.map((t) => `<p>${t}</p>`).join("")}${nego()}</div>` : ""}
+      ${q.ownPack && q.ownSticker ? "" : `<div class="tp-sim-head"><h2 class="tp-h" style="margin:0"><small>SIMULASI 1 · LENGKAP</small>${q.ownPack ? "Sticker dari MaklonGo" : q.ownSticker ? "Kemasan dari MaklonGo" : "Dengan kemasan & sticker dari MaklonGo"}</h2></div>`}
       <div class="tp-recs">${shown.map(recCard).join("") || '<div class="card muted">Belum ada base di kategori ini.</div>'}</div>
-      ${lastRecs.length > shown.length ? `<button class="btn btn-ghost load-more" data-act="showall">Tampilkan semua (${lastRecs.length})</button>` : ""}
+      ${main.length > shown.length ? `<button class="btn btn-ghost load-more" data-act="showall">Tampilkan semua (${main.length})</button>` : ""}
+      ${ownSection}
       <p class="small muted" style="margin-top:14px">Harga sudah termasuk bahan aktif dosis 1% per bahan. Belum termasuk ongkos kirim & sample. Harga final mengikuti invoice resmi setelah dicek admin.</p>`;
   }
 
@@ -539,7 +573,7 @@
   /* ------------------------------------------------------------ aksi */
   function useRec(r) {
     S.d = { ...emptyDraft(), baseId: r.b.id, vol: r.v, qty: r.qty, actives: [...r.d.actives],
-      pack: r.pack ? r.pack.id : "own", sticker: S.q.ownSticker ? "own" : "ours", variant: ((r.b.variants || [])[0] || {}).name || "" };
+      pack: r.pack ? r.pack.id : "own", sticker: r.ownSticker ? "own" : "ours", variant: ((r.b.variants || [])[0] || {}).name || "" };
     go("build");
   }
   function pickBase(id) {
@@ -642,9 +676,10 @@
       case "recommend": {
         S.q.perPcs = document.getElementById("qPer").value; S.q.total = document.getElementById("qTot").value;
         if (!(Number(S.q.perPcs) > 0)) { toast("Isi budget per pcs dulu"); return; }
-        S.ui.showAll = false; return go("results");
+        S.ui.showAll = false; S.ui.showAllOwn = false; return go("results");
       }
       case "showall": S.ui.showAll = true; return rerenderBuild();
+      case "showallown": S.ui.showAllOwn = true; return rerenderBuild();
       case "changebase": S.ui.pickCat = (IDX.bases[d.baseId] || {}).cat; d.baseId = null; return go("build");
       case "morepack": S.ui.packLimit += 24; return rerenderBuild();
       case "savesku": return saveSku();
