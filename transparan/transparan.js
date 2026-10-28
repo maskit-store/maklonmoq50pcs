@@ -1,13 +1,13 @@
 /* MaklonGo — versi harga transparan + rekomendasi dari budget */
 (function () {
   const { C, CFG, IDX, esc, store, toast } = window.MG;
-  const PP = window.MG_PUBLIC_PRICES;
   const ROOT = window.MG_ROOT || "";
-  const MOQ = CFG.moq || 50, MAXQ = PP.maxQty || 25000, WEBQ = 500; // di atas WEBQ ditangani CS Business Development
-  const TIERS = PP.tiers;
+  const MOQ = CFG.moq || 50, WEBQ = 500; // di atas WEBQ ditangani CS Business Development
+  // Harga jual diambil dari Apps Script setelah verifikasi OTP (tidak disimpan di file publik)
+  let PP = null, TIERS = [], MAXQ = 25000, DOSE = 0.01;
+  function setPrices(pp) { PP = pp; TIERS = pp.tiers; MAXQ = pp.maxQty || 25000; DOSE = (pp.activeDosePct || 1) / 100; }
   const tierOf = (q) => TIERS.reduce((t, x) => (q >= x.min ? x : t), TIERS[0]);
   const feesOf = (q) => { const t = tierOf(q); return t.bpom + t.halal; };
-  const DOSE = (PP.activeDosePct || 1) / 100;
   const FIXED_VOL = { B20: true, B24: true }; // Sheet mask & lip balm: hanya ukuran asli
   const BD_WA = "6285183889341";
 
@@ -114,7 +114,7 @@
   S.ui = { actCat: "all", packAll: false, packLimit: 12, showAll: false };
   const persist = () => store.set("mgt_state", { view: S.view, q: S.q, d: S.d, cart: S.cart, customer: S.customer, profile: S.profile });
   S.reg = { step: "form", busy: false, err: "", info: "" };
-  const registered = () => !!(S.profile && S.profile.done);
+  const registered = () => !!(S.profile && S.profile.done && S.profile.token && PP);
   const go = (v) => { S.view = v; persist(); render(); scrollTo({ top: 0 }); };
 
   /* ------------------------------------------------------------ views */
@@ -172,9 +172,8 @@
     try {
       const d = await api({ action: "otpSend", phone: p.phone });
       if (d.ok) { S.reg = { step: "otp", busy: false, err: "", info: "" }; render(); const el = document.getElementById("otpCode"); if (el) el.focus(); return; }
-      // OTP belum diaktifkan di Apps Script (mode preview) → lanjut tanpa verifikasi
-      if (d.error === "otp_not_configured" || d.error === "invalid order") return finishReg(false, "Mode preview: verifikasi OTP WhatsApp belum diaktifkan, data tersimpan tanpa verifikasi.");
-      S.reg = { step: "form", busy: false, err: d.error || "Gagal mengirim kode", info: "" }; render();
+      const msg = d.error === "otp_not_configured" || d.error === "invalid order" ? "Verifikasi WhatsApp sedang tidak tersedia. Silakan hubungi admin." : d.error;
+      S.reg = { step: "form", busy: false, err: msg || "Gagal mengirim kode", info: "" }; return render();
     } catch (e) { S.reg = { step: "form", busy: false, err: "Koneksi gagal, coba lagi.", info: "" }; render(); }
   }
   async function otpVerify() {
@@ -183,7 +182,7 @@
     S.reg = { ...S.reg, busy: true, err: "" }; render();
     try {
       const d = await api({ action: "otpVerify", phone: S.profile.phone, code });
-      if (d.ok) return finishReg(true);
+      if (d.ok && d.token) return finishReg(d.token);
       S.reg = { ...S.reg, busy: false, err: d.error || "Kode salah" }; render();
     } catch (e) { S.reg = { ...S.reg, busy: false, err: "Koneksi gagal, coba lagi." }; render(); }
   }
@@ -193,14 +192,24 @@
     catch (e) { S.reg = { ...S.reg, busy: false, err: "Koneksi gagal, coba lagi." }; }
     render();
   }
-  function finishReg(verified, info) {
-    S.profile = { ...S.profile, phone: window.MG.normalizePhone(S.profile.phone), verified, done: true, at: new Date().toISOString() };
+  async function finishReg(token) {
+    S.profile = { ...S.profile, phone: window.MG.normalizePhone(S.profile.phone), verified: true, done: true, token, at: new Date().toISOString() };
     const pr = S.profile;
     S.customer = { ...S.customer, name: pr.name, phone: pr.phone, email: pr.email, brand: pr.brand, ig: pr.ig };
-    S.reg = { step: "form", busy: false, err: "", info: "" };
+    persist();
     api({ action: "lead", lead: { name: pr.name, phone: pr.phone, email: pr.email, ig: pr.ig, brand: pr.brand } }).catch(() => {});
-    toast(info || "Nomor WhatsApp terverifikasi ✓", info ? 5000 : 2600);
-    go("home");
+    S.reg = { ...S.reg, busy: true, err: "", info: "Memuat daftar harga…" }; render();
+    if (await loadPrices()) { S.reg = { step: "form", busy: false, err: "", info: "" }; toast("Nomor WhatsApp terverifikasi ✓"); go("home"); }
+  }
+  // Ambil harga dengan token akses; token tidak sah / kedaluwarsa → kembali ke verifikasi
+  async function loadPrices() {
+    try {
+      const d = await api({ action: "pricelist", token: S.profile && S.profile.token });
+      if (d.ok && d.prices) { setPrices(d.prices); return true; }
+      S.profile = { ...(S.profile || {}), done: false, token: null, verified: false }; persist();
+      S.reg = { step: "form", busy: false, err: d.error === "unauthorized" ? "Sesi verifikasi berakhir, silakan verifikasi ulang nomor WhatsApp." : (d.error || "Gagal memuat harga"), info: "" };
+    } catch (e) { S.reg = { step: "form", busy: false, err: "Gagal memuat harga. Periksa koneksi lalu muat ulang halaman.", info: "" }; }
+    render(); return false;
   }
 
   function viewHome() {
@@ -459,7 +468,7 @@
     app.innerHTML = registered() ? (views[S.view] || viewHome)() : viewRegister();
     const who = document.getElementById("who");
     who.classList.toggle("hidden", !registered());
-    if (registered()) who.innerHTML = `${S.profile.verified ? "✅" : "👤"} ${esc(S.profile.name.split(" ")[0])} · <u>ubah</u>`;
+    if (registered()) who.innerHTML = `✅ ${esc(S.profile.name.split(" ")[0])} · <u>ubah</u>`;
     document.getElementById("btnBudget").classList.toggle("hidden", !registered());
     document.getElementById("cartPill").classList.toggle("hidden", !S.cart.length || !registered());
     document.getElementById("cartCount").textContent = S.cart.length;
@@ -497,6 +506,35 @@
     if (d.editIndex != null) S.cart[d.editIndex] = { ...d, editIndex: null }; else S.cart.push({ ...d, editIndex: null });
     S.d = emptyDraft(); toast("SKU tersimpan"); go("cart");
   }
+  // Catat pesanan ke Google Sheet + invoice PDF otomatis (antre di browser, dikirim ulang bila gagal)
+  function toOrderItem(d) {
+    const b = IDX.bases[d.baseId] || {}, pk = d.pack && IDX.packaging[d.pack] ? d.pack : null;
+    return { baseId: d.baseId, variant: d.variant || "", vol: d.vol, qty: Number(d.qty), unit: b.unit || "ml", actives: [...(d.actives || [])], customActives: "",
+      packagingId: pk, noPackaging: !pk, ownPackaging: d.pack === "own", packagingNote: d.pack === "own" ? "Customer bawa kemasan sendiri" : "",
+      productName: d.productName || b.name, sticker: d.sticker !== "own", ownSticker: d.sticker === "own", bpom: true, halal: true, sample: !!d.sample };
+  }
+  let flushing = false;
+  async function flushPending() {
+    if (flushing || !CFG.orderEndpoint) return;
+    flushing = true;
+    try {
+      for (const p of store.get("mgt_pending", [])) {
+        let ok = false;
+        try { const d = await api(p.body); ok = !!(d && d.ok); } catch (e) { ok = false; }
+        const q = store.get("mgt_pending", []);
+        store.set("mgt_pending", ok ? q.filter((x) => x.id !== p.id) : q.map((x) => (x.id === p.id ? { ...x, tries: x.tries + 1 } : x)).filter((x) => x.tries < 30));
+      }
+    } finally { flushing = false; }
+  }
+  function recordOrder(id, c) {
+    const order = { id, createdAt: new Date().toISOString(), catalogVersion: C.version, source: "pricelist",
+      customer: { name: c.name, phone: c.phone, email: c.email, ig: c.ig, city: c.city, brand: c.brand, brandNote: c.brandNote, notes: "Order dari web pricelist (harga transparan)" },
+      items: S.cart.map(toOrderItem) };
+    const body = { order: window.MG.enrichOrder(order), packed: window.MG.packOrder(order), token: S.profile.token };
+    const q = store.get("mgt_pending", []); q.push({ id, body, tries: 0 }); store.set("mgt_pending", q);
+    flushPending();
+  }
+
   function send() {
     const c = S.customer;
     Object.assign(c, { name: S.profile.name, phone: S.profile.phone, email: S.profile.email, brand: S.profile.brand, ig: S.profile.ig });
@@ -517,6 +555,7 @@
     });
     L.push("", `*Estimasi total: ${rp(grand)}* (belum termasuk ongkir)`, "Saya ingin diskusi / nego harga dan dibuatkan invoice & MoU. Terima kasih 🙏");
     const wa = window.MG.waLink(big ? BD_WA : CFG.adminWhatsApp, L.join("\n"));
+    recordOrder(id, c);
     S.lastId = id; S.cart = []; go("sent");
     const w = window.open(wa, "_blank"); if (!w) location.href = wa;
   }
@@ -525,7 +564,10 @@
   document.addEventListener("click", (e) => {
     const lq = e.target.closest("[data-ladq]");
     if (lq && S.view === "build") { S.d.qty = Number(lq.dataset.ladq); persist(); return rerenderBuild(); }
-    if (e.target.closest("#who")) { S.reg = { step: "form", busy: false, err: "", info: "" }; S.profile = { ...S.profile, done: false }; persist(); return render(); }
+    if (e.target.closest("#who")) {
+      if (!confirm("Ubah data diri? Nomor WhatsApp perlu diverifikasi ulang.")) return;
+      S.reg = { step: "form", busy: false, err: "", info: "" }; S.profile = { ...S.profile, done: false, token: null }; persist(); return render();
+    }
     const t = e.target.closest("button, [data-go]");
     if (!t || t.disabled) return;
     const ds = t.dataset, d = S.d;
@@ -581,5 +623,10 @@
   });
 
   if (!["home", "budget", "results", "build", "cart", "customer"].includes(S.view)) S.view = "home";
-  render();
+  flushPending();
+  addEventListener("online", flushPending);
+  if (S.profile && S.profile.done && S.profile.token) {
+    app.innerHTML = '<div class="tp-narrow card" style="margin-top:30px;text-align:center">Memuat daftar harga…</div>';
+    loadPrices().then((ok) => { if (ok) render(); });
+  } else render();
 })();

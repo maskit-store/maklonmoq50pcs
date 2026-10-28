@@ -26,7 +26,18 @@ const INVOICE_HEADERS = ["NoOrder", "Link", "Nama", "Waktu Order", "Brand", "No 
 const COL = { id: 1, link: 2, status: 15, packed: 16, json: 17, view: 12 };
 const STATUS_NAMES = { baru: "Baru", invoice: "Invoice terkirim", dp: "DP diterima", produksi: "Produksi", selesai: "Selesai", batal: "Batal" };
 
+// Harga bertingkat per jumlah order (sama dengan assets/js/pricing.js). Bisa diubah di dashboard → Pengaturan.
+const DEFAULT_TIERS = [
+  { min: 50, base: 1.0, actAdd: 5500, pack: 1.35, sticker: 4500, bpom: 3500000, halal: 3500000 },
+  { min: 500, base: 0.95, actAdd: 5000, pack: 1.35, sticker: 4000, bpom: 3500000, halal: 3500000 },
+  { min: 1000, base: 0.85, actAdd: 4000, pack: 1.35, sticker: 3750, bpom: 0, halal: 3500000 },
+  { min: 5000, base: 0.75, actAdd: 2000, pack: 1.2, sticker: 2500, bpom: 0, halal: 3500000 },
+  { min: 10000, base: 0.5, actAdd: 1000, pack: 1.1, sticker: 1250, bpom: 0, halal: 3500000 },
+  { min: 25000, base: 0.4, actAdd: 0, pack: 1.0, sticker: 990, bpom: 0, halal: 3500000 },
+];
+
 const DEFAULT_SETTINGS = {
+  tiers: DEFAULT_TIERS, maxQty: 25000,
   activeDosePct: 1, activeScrapFactor: 1.35, packagingMarkup: 1.35,
   bpomLabPerSku: 3500000, halalPerSku: 3500000, samplePerSku: 555000, stickerPerPcs: 0,
   roundPerPcs: 1, dpPercent: 50, invoiceDueDays: 7,
@@ -46,6 +57,11 @@ function doPost(e) {
   if (data.action === "otpSend") return json_(otpSend_(data));
   if (data.action === "otpVerify") return json_(otpVerify_(data));
   if (data.action === "lead") return json_(saveLead_(data.lead || {}));
+  if (data.action === "pricelist") {
+    const phone = checkToken_(data.token);
+    if (!phone) return json_({ error: "unauthorized" });
+    return json_({ ok: true, prices: publicPrices_() });
+  }
 
   if (data.action === "syncPrices") {
     if (!checkKey_(data.key)) return json_({ error: "unauthorized" });
@@ -103,6 +119,10 @@ function doPost(e) {
 
   const o = data.order;
   if (!o || !o.id || !o.items || !o.customer) return json_({ error: "invalid order" });
+  if (o.source === "pricelist") {
+    const vphone = checkToken_(data.token);
+    o.customer.verified = !!vphone && vphone === normPhone_(o.customer.phone);
+  }
   const lock = LockService.getScriptLock();
   lock.waitLock(20000);
   try {
@@ -216,7 +236,38 @@ function otpVerify_(d) {
   if (otpHash_(phone, String(d.code || "").trim()) !== h) { cache.put("otptry:" + phone, String(tries + 1), 300); return { error: "Kode salah" }; }
   cache.remove("otp:" + phone);
   cache.put("otpok:" + phone, "1", 21600);
-  return { ok: true };
+  return { ok: true, token: makeToken_(phone) };
+}
+
+/* Token akses web pricelist: "<nomor>.<kedaluwarsa>.<tanda tangan HMAC>", berlaku 30 hari */
+function tokenSecret_() {
+  const props = PropertiesService.getScriptProperties();
+  let k = props.getProperty("TOKEN_SECRET");
+  if (!k) { k = Utilities.getUuid() + Utilities.getUuid(); props.setProperty("TOKEN_SECRET", k); }
+  return k;
+}
+function sign_(payload) {
+  return Utilities.base64EncodeWebSafe(Utilities.computeHmacSha256Signature(payload, tokenSecret_())).replace(/=+$/, "");
+}
+function makeToken_(phone) {
+  const payload = phone + "." + (Date.now() + 30 * 864e5);
+  return payload + "." + sign_(payload);
+}
+function checkToken_(tok) {
+  const m = String(tok || "").match(/^(\d{8,15})\.(\d+)\.([\w-]+)$/);
+  if (!m || Number(m[2]) < Date.now() || sign_(m[1] + "." + m[2]) !== m[3]) return null;
+  return m[1];
+}
+
+// Harga jual untuk web pricelist (hanya untuk pengunjung yang sudah verifikasi OTP)
+function publicPrices_() {
+  const P = loadPrices_(), st = P.settings;
+  const out = { bases: {}, actives: {}, packaging: {}, tiers: tiersOf_(st), maxQty: num_(st.maxQty, 25000),
+    activeDosePct: num_(st.activeDosePct, 1), fees: { sample: num_(st.samplePerSku, 555000) } };
+  Object.keys(P.bases).forEach((k) => { const v = P.bases[k]; if (v.price && v.vol) out.bases[k] = v.price / v.vol; });
+  Object.keys(P.actives).forEach((k) => { const v = P.actives[k]; if (v.pricePerGram) out.actives[k] = v.pricePerGram * num_(st.activeScrapFactor, 1.35); });
+  Object.keys(P.packaging).forEach((k) => { const v = P.packaging[k]; if (v.filePrice && v.filePrice * 1.35 < 150000) out.packaging[k] = v.filePrice; });
+  return out;
 }
 
 function saveLead_(l) {
@@ -302,29 +353,44 @@ function loadPrices_() {
 }
 const num_ = (v, d) => (v === "" || v == null || isNaN(Number(v)) ? (d || 0) : Number(v));
 
+function tiersOf_(st) { return st.tiers && st.tiers.length ? st.tiers : DEFAULT_TIERS; }
+function tierOf_(st, q) { return tiersOf_(st).reduce((t, x) => (q >= x.min ? x : t), tiersOf_(st)[0]); }
+
 function computeSku_(item, prices) {
   const st = prices.settings;
   const qty = num_(item.qty);
+  const t = tierOf_(st, qty);
   const vol = num_(item.vol);
   const lines = [];
   const bp = prices.bases[item.baseId];
-  lines.push({ label: "Base", value: bp ? (bp.price / bp.vol) * vol : 0 });
+  lines.push({ label: "Base", value: bp ? (bp.price / bp.vol) * vol * t.base : 0 });
   const doseG = vol * (num_(st.activeDosePct, 1) / 100);
   (item.actives || []).forEach((id, i) => {
     const ap = prices.actives[id];
-    lines.push({ label: (item.activeNames || [])[i] || id, value: ap ? ap.pricePerGram * doseG * num_(st.activeScrapFactor, 1.35) : 0 });
+    lines.push({ label: (item.activeNames || [])[i] || id, value: ap ? ap.pricePerGram * doseG * num_(st.activeScrapFactor, 1.35) + num_(t.actAdd) : 0 });
   });
   const pp = item.noPackaging ? null : prices.packaging[item.packagingId];
-  lines.push({ label: "Kemasan", value: pp && pp.price ? pp.price : 0 });
-  if (item.sticker) lines.push({ label: "Sticker", value: num_(st.stickerPerPcs) });
+  const pack = pp ? (pp.filePrice ? Math.round(pp.filePrice * num_(t.pack, 1.35)) : num_(pp.price)) : 0;
+  lines.push({ label: "Kemasan", value: pack });
+  if (item.sticker) lines.push({ label: "Sticker", value: num_(t.sticker) });
   const round = Math.max(1, num_(st.roundPerPcs, 1));
   const rawUnit = lines.reduce((s, l) => s + num_(l.value), 0);
   const unit = round > 1 ? Math.ceil(rawUnit / round) * round : Math.round(rawUnit);
-  const bpom = item.bpom ? num_(st.bpomLabPerSku) : 0;
-  const halal = item.halal ? num_(st.halalPerSku) : 0;
+  const bpom = item.bpom ? num_(t.bpom) : 0;
+  const halal = item.halal ? num_(t.halal) : 0;
   const sample = item.sample ? num_(st.samplePerSku, 555000) : 0;
   return { lines, qty, unit, production: unit * qty, bpom, halal, sample, total: unit * qty + bpom + halal + sample,
-    needsReview: !bp || (!item.noPackaging && !(pp && pp.price)) || !!item.noPackaging || !!item.customActives };
+    needsReview: !bp || (!item.noPackaging && !pack) || (!!item.noPackaging && !item.ownPackaging) || !!item.customActives };
+}
+
+// Gambaran harga jika jumlah diperbesar (qty sekarang lalu tiap tier sampai maxQty)
+function ladder_(item, prices) {
+  const q = num_(item.qty), max = num_(prices.settings.maxQty, 25000);
+  const qs = [q].concat(tiersOf_(prices.settings).map((t) => t.min)).filter((x, i, a) => a.indexOf(x) === i && x >= q && x <= max).sort((a, b) => a - b);
+  return qs.map((n) => {
+    const s = computeSku_(Object.assign({}, item, { qty: n, sample: false }), prices);
+    return { qty: n, unit: s.unit, perPcs: (s.production + s.bpom + s.halal) / n, total: s.production + s.bpom + s.halal };
+  });
 }
 
 function computeOrder_(order, prices) {
@@ -339,7 +405,7 @@ function computeOrder_(order, prices) {
 function createInvoicePdf_(o) {
   const prices = loadPrices_();
   const calc = computeOrder_(o, prices);
-  const html = invoiceHtml_(o, calc, prices.settings);
+  const html = invoiceHtml_(o, calc, prices.settings, prices);
   const name = `INV-${o.id} - ${o.customer.brand || o.customer.name}.pdf`;
   const pdf = Utilities.newBlob(html, MimeType.HTML, "invoice.html").getAs(MimeType.PDF).setName(name);
   const file = DriveApp.getFolderById(INVOICE_FOLDER_ID).createFile(pdf);
@@ -351,6 +417,7 @@ function createInvoicePdf_(o) {
 function esc_(s) {
   return String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 }
+function n_(n) { return Math.round(n).toString().replace(/\B(?=(\d{3})+(?!\d))/g, "."); }
 function rp_(n) {
   return "Rp " + Math.round(n).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ".");
 }
@@ -366,7 +433,7 @@ function logoDataUri_() {
   } catch (e) { return ""; }
 }
 
-function invoiceHtml_(o, calc, st) {
+function invoiceHtml_(o, calc, st, prices) {
   const c = o.customer;
   const logo = logoDataUri_();
   const now = new Date();
@@ -385,7 +452,7 @@ function invoiceHtml_(o, calc, st) {
       it.sticker ? "Termasuk sticker label" : "",
     ].filter(Boolean).join("<br>");
     rows.push([++no, desc, s.qty + " pcs", rp_(s.unit), rp_(s.production)]);
-    if (it.bpom) rows.push([++no, `Biaya BPOM &amp; Lab — SKU ${i + 1}`, "1 SKU", rp_(s.bpom), rp_(s.bpom)]);
+    if (it.bpom) rows.push([++no, `Biaya BPOM &amp; Lab — SKU ${i + 1}${s.bpom ? "" : " (gratis untuk order ≥ 1.000 pcs)"}`, "1 SKU", s.bpom ? rp_(s.bpom) : "GRATIS", s.bpom ? rp_(s.bpom) : "GRATIS"]);
     if (it.halal) rows.push([++no, `Sertifikasi Halal — SKU ${i + 1}`, "1 SKU", rp_(s.halal), rp_(s.halal)]);
     if (it.sample) rows.push([++no, `Sample produk (termasuk PPN) — SKU ${i + 1}`, "1 SKU", rp_(s.sample), rp_(s.sample)]);
   });
@@ -426,11 +493,16 @@ function invoiceHtml_(o, calc, st) {
     <td style="text-align:right"><h1>INVOICE</h1><span class="muted">No. Invoice: INV/${esc_(o.id)}<br>No. Order: ${esc_(o.id)}<br>Tanggal: ${tgl_(now)}<br>Jatuh tempo: ${tgl_(due)}</span></td>
   </tr></table>
   <hr style="border:0;border-top:1px solid #e5e5e5;margin:12px 0">
-  <b>Ditagihkan kepada:</b><br><span class="muted">${esc_(c.name)}<br>Brand: ${esc_(c.brand)}<br>${esc_(c.phone)} · ${esc_(c.email)}<br>${esc_(c.city)}</span>
+  <b>Ditagihkan kepada:</b><br><span class="muted">${esc_(c.name)}<br>Brand: ${esc_(c.brand)}<br>${esc_(c.phone)} · ${esc_(c.email)}${c.ig ? " · IG " + esc_(c.ig) : ""}<br>${esc_(c.city)}</span>
   <table class="items" style="margin-top:14px"><tr><th class="c" style="width:22px">No</th><th>Deskripsi</th><th class="r">Qty</th><th class="r">Harga</th><th class="r">Jumlah</th></tr>
     ${rows.map((r) => `<tr><td class="c">${r[0]}</td><td>${r[1]}</td><td class="r">${r[2]}</td><td class="r">${r[3]}</td><td class="r">${r[4]}</td></tr>`).join("")}
   </table>
   <table class="tot" style="width:62%;margin:10px 0 0 auto">${tot.map((t) => `<tr><td>${t[0]}</td><td class="r">${t[1]}</td></tr>`).join("")}</table>
+  ${o.items.map((it, i) => { const L = ladder_(it, prices); if (L.length < 2) return "";
+    return `<p style="margin:14px 0 4px"><b>Gambaran harga jika jumlah diperbesar — SKU ${i + 1}${it.productName ? ": " + esc_(it.productName) : ""}</b></p>
+    <table class="items"><tr><th>Jumlah</th><th class="r">Harga / pcs</th><th class="r">Per pcs incl. BPOM &amp; Halal</th><th class="r">Total</th><th class="r">Hemat</th></tr>
+    ${L.map((r) => `<tr><td>${n_(r.qty)} pcs</td><td class="r">${rp_(r.unit)}</td><td class="r">${rp_(r.perPcs)}</td><td class="r">${rp_(r.total)}</td><td class="r">${r.qty === L[0].qty ? "pesanan ini" : "-" + Math.round((1 - r.perPcs / L[0].perPcs) * 100) + "%"}</td></tr>`).join("")}</table>`; }).join("")}
+  <p class="muted" style="font-size:8.5pt"><i>Harga bisa dinegosiasikan atau disesuaikan kembali bersama admin. Order di atas ${n_(num_(st.maxQty, 25000))} pcs: hubungi admin.</i></p>
   ${review ? `<div class="note">Sebagian komponen (kemasan dicarikan admin / request bahan aktif) akan dikonfirmasi admin. Invoice final dapat berubah setelah dicek admin.</div>` : ""}
   ${st.bankInfo ? `<p><b>Informasi Pembayaran</b><br>${esc_(st.bankInfo).replace(/\n/g, "<br>")}</p>` : ""}
   <p><b>Catatan</b><br>${esc_(st.invoiceNotes).replace(/\n/g, "<br>")}</p>

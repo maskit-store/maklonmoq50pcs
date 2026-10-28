@@ -86,6 +86,7 @@
   }
 
   function packagingLabel(item) {
+    if (item.ownPackaging) return "Customer bawa kemasan sendiri";
     if (item.noPackaging) return "Tidak ada pilihan kemasan — Admin bantu carikan yang lain";
     const p = IDX.packaging[item.packagingId];
     if (!p) return "-";

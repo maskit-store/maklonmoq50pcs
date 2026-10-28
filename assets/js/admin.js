@@ -1,12 +1,13 @@
 /* MaklonGo — dashboard admin */
 (function () {
   const { C, CFG, IDX, esc, rupiah, fmtDate, store, toast } = window.MG;
-  const { decryptPrices, encryptPrices, computeOrder } = window.MGP;
+  const { decryptPrices, encryptPrices, computeOrder, ladder, DEFAULT_TIERS } = window.MGP;
 
   const DEFAULT_SETTINGS = {
     moq: 50, activeDosePct: 1, activeScrapFactor: 1.35, packagingMarkup: 1.35,
     bpomLabPerSku: CFG.fees.bpomLabPerSku, halalPerSku: CFG.fees.halalPerSku, stickerPerPcs: 0,
     samplePerSku: CFG.fees.samplePerSku || 555000,
+    tiers: DEFAULT_TIERS.map((t) => ({ ...t })), maxQty: 25000,
     roundPerPcs: 1, dpPercent: 50, invoiceDueDays: 7, invoiceBreakdown: false,
     signerName: "", signerTitle: "Direktur", courtCity: "",
     companyName: CFG.appName, companyAddress: "", companyPhone: CFG.adminWhatsApp, companyEmail: "",
@@ -643,6 +644,16 @@
         </div>`).join("") || `<div class="card muted">Belum ada order. Order masuk otomatis saat admin membuka link di pesan WhatsApp customer${endpoint ? " atau saat sinkron Google Sheet" : ""}. Bisa juga tempel pesan WA lewat tombol <b>Import dari WA</b>.</div>`}</div>`;
   }
 
+  // Gambaran harga SKU jika jumlah diperbesar (sampai 25.000 pcs), dihitung otomatis tanpa penyesuaian manual
+  function ladderTable(it) {
+    const rows = ladder(it, A.prices);
+    if (rows.length < 2) return "";
+    const base = rows[0];
+    return `<div class="table-wrap" style="margin-top:10px"><table class="tbl"><thead><tr><th>Jika pesan</th><th class="num">Harga / pcs</th><th class="num">Per pcs incl. BPOM & Halal</th><th class="num">Total</th><th class="num">Hemat</th></tr></thead>
+      <tbody>${rows.map((r) => `<tr ${r.qty === base.qty ? 'style="background:var(--accent-soft)"' : ""}><td>${r.qty.toLocaleString("id-ID")} pcs</td><td class="num">${rupiah(r.unit)}</td><td class="num">${rupiah(r.perPcs)}</td><td class="num">${rupiah(r.total)}</td>
+        <td class="num">${r.qty === base.qty ? "sekarang" : "−" + Math.round((1 - r.perPcs / base.perPcs) * 100) + "%"}</td></tr>`).join("")}</tbody></table></div>`;
+  }
+
   /* ------------------------------------------------------------ order detail */
   function openOrder(id) {
     A.openId = id;
@@ -684,6 +695,7 @@
           </tfoot>
         </table></div>
         ${ia && Object.keys(ia).length ? `<button class="link-btn small" data-resetadj="${i}">Reset ke harga otomatis</button>` : ""}
+        ${ladderTable(it)}
       </div>`;
     }).join("");
 
@@ -707,7 +719,9 @@
           <dt>Email</dt><dd><a href="mailto:${esc(c.email)}">${esc(c.email)}</a></dd>
           <dt>Kota</dt><dd>${esc(c.city)}</dd>
           <dt>Brand</dt><dd>${esc(c.brand)}</dd>
+          ${c.ig ? `<dt>Instagram</dt><dd>${esc(c.ig)}</dd>` : ""}
           ${c.brandNote ? `<dt>Catatan Brand</dt><dd>${esc(c.brandNote)}</dd>` : ""}
+          ${o.source === "pricelist" ? `<dt>Sumber</dt><dd>Web pricelist (harga transparan)${c.verified ? " · WA terverifikasi OTP" : ""}</dd>` : ""}
           ${c.notes ? `<dt>Catatan</dt><dd>${esc(c.notes)}</dd>` : ""}
         </dl>
       </div>
@@ -806,7 +820,7 @@
           body.push(["", `   • ${name} / pcs`, "", rp(l.value), ""]);
         });
       }
-      if (it.bpom) body.push([String(body.filter((r) => r[0]).length + 1), `Biaya BPOM & Lab — SKU ${i + 1}`, "1 SKU", rp(s.bpom), rp(s.bpom)]);
+      if (it.bpom) body.push([String(body.filter((r) => r[0]).length + 1), `Biaya BPOM & Lab — SKU ${i + 1}${s.bpom ? "" : " (gratis untuk order ≥ 1.000 pcs)"}`, "1 SKU", s.bpom ? rp(s.bpom) : "GRATIS", s.bpom ? rp(s.bpom) : "GRATIS"]);
       if (it.halal) body.push([String(body.filter((r) => r[0]).length + 1), `Sertifikasi Halal — SKU ${i + 1}`, "1 SKU", rp(s.halal), rp(s.halal)]);
       if (it.sample) body.push([String(body.filter((r) => r[0]).length + 1), `Sample produk (termasuk PPN) — SKU ${i + 1}`, "1 SKU", rp(s.sample), rp(s.sample)]);
     });
@@ -836,7 +850,27 @@
       didParseCell: (h) => { if (h.row.raw[0] === "TOTAL") { h.cell.styles.fontStyle = "bold"; h.cell.styles.fontSize = 11; h.cell.styles.textColor = green; } },
     });
 
-    y = doc.lastAutoTable.finalY + 10;
+    y = doc.lastAutoTable.finalY + 8;
+    // Gambaran harga jika jumlah diperbesar (sampai 25.000 pcs)
+    o.items.forEach((it, i) => {
+      const rows = ladder(it, A.prices);
+      if (rows.length < 2) return;
+      if (y > doc.internal.pageSize.getHeight() - 60) { doc.addPage(); y = 20; }
+      doc.setFont("helvetica", "bold"); doc.setFontSize(9.5); doc.setTextColor(29, 29, 31);
+      doc.text(`Gambaran harga jika jumlah diperbesar — SKU ${i + 1}${it.productName ? ": " + it.productName : ""}`, M, y);
+      doc.autoTable({
+        startY: y + 2, margin: { left: M, right: M },
+        head: [["Jumlah", "Harga / pcs", "Per pcs incl. BPOM & Halal", "Total", "Hemat"]],
+        body: rows.map((r) => [`${r.qty.toLocaleString("id-ID")} pcs`, rp(r.unit), rp(r.perPcs), rp(r.total), r.qty === rows[0].qty ? "pesanan ini" : "-" + Math.round((1 - r.perPcs / rows[0].perPcs) * 100) + "%"]),
+        styles: { font: "helvetica", fontSize: 8.4, cellPadding: 1.8, textColor: [40, 40, 40], lineColor: [232, 228, 220], lineWidth: 0.1 },
+        headStyles: { fillColor: [227, 247, 246], textColor: [10, 90, 87], fontStyle: "bold" },
+        columnStyles: { 1: { halign: "right" }, 2: { halign: "right" }, 3: { halign: "right" }, 4: { halign: "right" } },
+      });
+      y = doc.lastAutoTable.finalY + 6;
+    });
+    doc.setFont("helvetica", "italic"); doc.setFontSize(8.5); doc.setTextColor(90);
+    doc.text(`Harga bisa dinegosiasikan atau disesuaikan kembali bersama admin. Order di atas ${Number(st.maxQty || 25000).toLocaleString("id-ID")} pcs: hubungi admin.`, M, y);
+    y += 8;
     const block = (title, text) => {
       if (!text) return;
       const lines = doc.splitTextToSize(text, W - 2 * M);
@@ -1059,15 +1093,18 @@
     const t = (k, label, area) => `<div class="field"><label>${label}</label>${area ? `<textarea data-set="${k}">${esc(s[k])}</textarea>` : `<input data-set="${k}" value="${esc(s[k])}">`}</div>`;
     return `<div class="grid-2" style="gap:14px">
       <div class="card"><h3 style="margin-top:0">Rumus harga</h3>
-        ${n("bpomLabPerSku", "Biaya BPOM & Lab / SKU (Rp)", "Samakan juga dengan assets/js/config.js agar teks di web customer sama.")}
-        ${n("halalPerSku", "Biaya Halal / SKU (Rp)")}
         ${n("samplePerSku", "Harga sample / SKU (Rp, incl. PPN)")}
-        ${n("stickerPerPcs", "Harga sticker / pcs (Rp)")}
         ${n("activeDosePct", "Dosis bahan aktif (%)")}
         ${n("activeScrapFactor", "Scrap factor bahan aktif (×)", "1.35 = +35%")}
-        ${n("packagingMarkup", "Pengali harga kemasan (×)", "Mengubah ini menghitung ulang semua harga kemasan.")}
+        ${n("packagingMarkup", "Pengali harga kemasan di tab Kemasan (×)", "Hanya untuk kolom 'Harga jual' di tab Kemasan. Harga di order mengikuti tabel harga bertingkat.")}
         ${n("roundPerPcs", "Pembulatan harga per pcs ke atas (Rp)", "1 = tanpa pembulatan, 100 = dibulatkan ke Rp100 terdekat ke atas")}
         ${n("dpPercent", "DP (%)", "0 = tidak ditampilkan")}
+      </div>
+      <div class="card" style="grid-column:1/-1"><h3 style="margin-top:0">Harga bertingkat per jumlah order</h3>
+        <p class="small muted">Berlaku untuk perhitungan order, invoice PDF, dan web pricelist. Tier dipakai jika jumlah order ≥ "Mulai qty".</p>
+        <div class="table-wrap"><table class="tbl"><thead><tr><th>Mulai qty</th><th class="num">Base (×)</th><th class="num">+ Rp / bahan aktif</th><th class="num">Kemasan (× harga supplier)</th><th class="num">Sticker Rp/pcs</th><th class="num">BPOM Rp/SKU</th><th class="num">Halal Rp/SKU</th></tr></thead>
+          <tbody>${(s.tiers || []).map((t, i) => `<tr>${["min", "base", "actAdd", "pack", "sticker", "bpom", "halal"].map((k) => `<td class="num"><input class="inp" type="number" step="any" data-tier="${i}:${k}" value="${t[k]}"></td>`).join("")}</tr>`).join("")}</tbody></table></div>
+        <div class="field" style="max-width:260px;margin-top:10px"><label>Qty maksimal (di atasnya: hubungi admin)</label><input type="number" data-set="maxQty" value="${s.maxQty}"></div>
       </div>
       <div class="card"><h3 style="margin-top:0">Invoice</h3>
         ${t("companyName", "Nama perusahaan")}
@@ -1197,6 +1234,12 @@
       const p = (A.prices.packaging[ds.packprice] = A.prices.packaging[ds.packprice] || {});
       p.filePrice = t.value === "" ? null : Number(t.value);
       p.price = p.filePrice ? Math.round(p.filePrice * A.prices.settings.packagingMarkup) : null;
+      savePrices(); return render();
+    }
+    if (ds.tier) {
+      const [i, k] = ds.tier.split(":");
+      A.prices.settings.tiers[+i][k] = Number(t.value) || 0;
+      A.prices.settings.tiers.sort((a, b) => a.min - b.min);
       savePrices(); return render();
     }
     if (ds.set) {
