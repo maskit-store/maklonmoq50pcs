@@ -132,25 +132,28 @@
   function viewRegister() {
     const p = S.profile || {}, r = S.reg;
     const otp = r.step === "otp";
-    return `<div class="tp-narrow tp-reg">
-      <div class="hero" style="padding:26px 0 8px"><img class="hero-logo" src="${ROOT}assets/img/logo.png" alt="MaklonGo by SAINSGO" width="250" height="54">
-        <h1 style="font-size:clamp(24px,6vw,34px)">Lihat harga maklon <mark>transparan</mark></h1>
-        <p class="lead">Isi data diri dulu untuk membuka kalkulator harga, rekomendasi dari budget, dan simulasi harga sampai 25.000 pcs.</p></div>
-      <div class="card">
-        ${otp ? `<h3 style="margin-top:0">Verifikasi nomor WhatsApp</h3>
+    return `<div class="tp-reg">
+      <div class="reg-intro"><span class="fx-tag">● AREA PRODUKSI · AKSES TERBATAS</span>
+        <h1>Masuk ke <span>pabrik</span> MaklonGo</h1>
+        <p>Isi kartu akses pengunjung untuk membuka harga transparan, rekomendasi dari budget, dan simulasi harga sampai 25.000 pcs.</p>
+        <ul class="reg-perks"><li>🔓 Harga setiap komponen terbuka</li><li>🎯 Rekomendasi sesuai budget</li><li>📉 Simulasi harga 50–25.000 pcs</li></ul></div>
+      <div class="card pass">
+        <div class="pass-top"><span class="pass-slot"></span><div><small>VISITOR PASS</small><b>MAKLONGO FACTORY</b></div><span class="pass-badge">${otp ? "AKTIVASI" : "TAMU"}</span></div>
+        <div class="pass-body">
+        ${otp ? `<h3 style="margin-top:0">Aktivasi kartu akses</h3>
           <p class="small muted">Kode 6 digit sudah dikirim ke WhatsApp <b>+${esc(window.MG.normalizePhone(p.phone))}</b>. Kode berlaku 5 menit.</p>
           <div class="field"><label for="otpCode">Kode OTP</label><input id="otpCode" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="••••••" class="tp-otp"></div>
           ${r.err ? `<div class="err" style="margin-bottom:10px">${esc(r.err)}</div>` : ""}
-          <button class="btn btn-primary btn-block btn-lg" data-act="otpverify" ${r.busy ? "disabled" : ""}>${r.busy ? "Memeriksa…" : "Verifikasi & lanjut"}</button>
+          <button class="btn btn-primary btn-block btn-lg" data-act="otpverify" ${r.busy ? "disabled" : ""}>${r.busy ? "Memeriksa…" : "Verifikasi & masuk pabrik"}</button>
           <div class="row between small" style="margin-top:12px"><button class="link-btn" data-act="otpback">← Ubah data / nomor</button><button class="link-btn" data-act="otpresend" ${r.busy ? "disabled" : ""}>Kirim ulang kode</button></div>`
         : `${PF.map(([k, label, type, ph]) => `<div class="field ${r.bad && r.bad.includes(k) ? "invalid" : ""}"><label for="p-${k}">${label} <span class="req">*</span></label>
             <input id="p-${k}" type="${type}" value="${esc(p[k] || "")}" placeholder="${ph}" autocomplete="${{ name: "name", phone: "tel", email: "email" }[k] || "off"}">
             ${k === "phone" ? '<div class="hint">Kami kirim kode verifikasi ke WhatsApp nomor ini.</div>' : ""}</div>`).join("")}
           ${r.err ? `<div class="err" style="margin-bottom:10px">${esc(r.err)}</div>` : ""}
           <label class="checkrow" style="margin-bottom:12px"><input type="checkbox" id="p-agree" ${p.agree ? "checked" : ""}><span><b>Saya setuju dihubungi tim MaklonGo</b><span class="small muted">melalui WhatsApp / email terkait penawaran maklon.</span></span></label>
-          <button class="btn btn-primary btn-block btn-lg" data-act="regsubmit" ${r.busy ? "disabled" : ""}>${r.busy ? "Mengirim kode…" : "Kirim kode verifikasi WhatsApp →"}</button>`}
+          <button class="btn btn-primary btn-block btn-lg" data-act="regsubmit" ${r.busy ? "disabled" : ""}>${r.busy ? "Mengirim kode…" : "Aktifkan kartu via WhatsApp →"}</button>`}
         ${r.info ? `<div class="notice small" style="margin-top:12px">${r.info}</div>` : ""}
-      </div></div>`;
+      </div></div></div>`;
   }
   function readProfile() {
     const p = { ...(S.profile || {}) };
@@ -212,26 +215,63 @@
     render(); return false;
   }
 
+  // Ilustrasi lini produksi (SVG animasi ringan; diam jika pengguna memilih kurangi animasi)
+  function factoryScene() {
+    const bottle = (x, c) => `<g transform="translate(${x} 0)"><rect x="-9" y="214" width="18" height="34" rx="5" fill="#f4f8f9"/><rect x="-9" y="226" width="18" height="12" fill="${c}"/>
+      <rect x="-4" y="205" width="8" height="10" rx="2" fill="#cfd8dc"/><rect x="-2" y="199" width="4" height="7" fill="#90a4ae"/></g>`;
+    const tank = (x, c, d) => `<g transform="translate(${x} 0)">
+      <rect x="-52" y="40" width="104" height="128" rx="14" fill="url(#steel)" stroke="#9fb3ba" stroke-width="1.5"/>
+      <ellipse cx="0" cy="40" rx="52" ry="10" fill="#dfe8eb" stroke="#9fb3ba"/>
+      <rect x="-30" y="70" width="60" height="70" rx="8" fill="#0d2a30" stroke="#6f8a91" stroke-width="2"/>
+      <clipPath id="win${x}"><rect x="-28" y="72" width="56" height="66" rx="6"/></clipPath>
+      <g clip-path="url(#win${x})"><g class="fx-wave" style="animation-delay:${d}s"><path d="M-90 98 q15 -8 30 0 t30 0 t30 0 t30 0 t30 0 t30 0 v60 h-180z" fill="${c}" opacity=".95"/></g>
+        <circle class="fx-bubble" cx="-10" cy="130" r="3" fill="#fff" opacity=".6"/><circle class="fx-bubble b2" cx="12" cy="132" r="2" fill="#fff" opacity=".5"/></g>
+      <line x1="0" y1="20" x2="0" y2="110" stroke="#78909c" stroke-width="3"/><rect x="-14" y="10" width="28" height="14" rx="3" fill="#455a64"/>
+      <g class="fx-spin" style="transform-origin:0px 110px"><rect x="-16" y="108" width="32" height="4" rx="2" fill="#b0bec5"/></g>
+      <circle cx="38" cy="56" r="9" fill="#fff" stroke="#9fb3ba"/><line class="fx-needle" x1="38" y1="56" x2="38" y2="49" stroke="#e53935" stroke-width="2" style="transform-origin:38px 56px"/>
+      <rect x="-40" y="168" width="10" height="26" fill="#90a4ae"/><rect x="30" y="168" width="10" height="26" fill="#90a4ae"/>
+      <circle class="fx-led" cx="-38" cy="52" r="3.5" fill="#4ade80"/></g>`;
+    const bottles = [0, 70, 140, 210, 280, 350, 420, 490, 560, 630, 700].map((x, i) => bottle(x, ["#11bab5", "#f4c24f", "#ff8a80", "#9575cd"][i % 4])).join("");
+    return `<svg class="fx" viewBox="0 0 800 270" role="img" aria-label="Ilustrasi lini produksi pabrik skincare">
+      <defs><linearGradient id="steel" x1="0" x2="1"><stop offset="0" stop-color="#b8c7cc"/><stop offset=".35" stop-color="#f4f8f9"/><stop offset=".6" stop-color="#cfdade"/><stop offset="1" stop-color="#9fb1b7"/></linearGradient>
+        <linearGradient id="belt" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#37474f"/><stop offset="1" stop-color="#1c262b"/></linearGradient></defs>
+      ${tank(110, "#11bab5", 0)}${tank(250, "#f4c24f", -1.2)}${tank(390, "#ff8a80", -2.1)}
+      <path d="M110 194 V200 H560 V176" fill="none" stroke="#90a4ae" stroke-width="7" stroke-linejoin="round"/><path d="M250 194 V200 M390 194 V200" stroke="#90a4ae" stroke-width="7"/>
+      <rect x="520" y="120" width="90" height="56" rx="8" fill="#263238" stroke="#4f646c"/><rect x="532" y="132" width="40" height="18" rx="3" fill="#0f3d3a"/>
+      <text x="552" y="145" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="10" fill="#4ade80" class="fx-count">FILL</text>
+      <circle class="fx-led" cx="590" cy="140" r="4" fill="#f4c24f"/><rect x="556" y="176" width="10" height="20" fill="#78909c"/>
+      <circle class="fx-drop" cx="561" cy="200" r="3" fill="#11bab5"/>
+      <rect x="660" y="96" width="110" height="70" rx="8" fill="#263238" stroke="#4f646c"/><text x="715" y="118" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="9" fill="#90a4ae">QC · LABEL</text>
+      <rect x="676" y="128" width="78" height="8" rx="4" fill="#37474f"/><rect class="fx-prog" x="676" y="128" width="78" height="8" rx="4" fill="#11bab5"/>
+      <rect x="676" y="144" width="30" height="10" rx="3" fill="#4ade80" opacity=".8"/>
+      <g class="fx-belt-wrap"><rect x="0" y="246" width="800" height="16" rx="8" fill="url(#belt)"/>
+        ${Array.from({ length: 21 }, (_, i) => `<circle cx="${i * 40 + 10}" cy="254" r="5" fill="#546e7a"/>`).join("")}
+        <g class="fx-belt"><g>${bottles}</g><g transform="translate(-770 0)">${bottles}</g></g></g>
+    </svg>`;
+  }
+
   function viewHome() {
-    return `<section class="hero tp-hero">
-      <img class="hero-logo" src="${ROOT}assets/img/logo.png" alt="MaklonGo by SAINSGO" width="250" height="54">
-      <span class="highlight">💰 Harga transparan · mulai ${MOQ} pcs</span>
-      <h1>Rancang produk <mark>sesuai budget</mark> kamu</h1>
-      <p class="lead">Lihat harga setiap komponen secara langsung: base, bahan aktif, kemasan & sticker. Atur komposisinya sampai pas dengan budget. Makin banyak pesan, makin murah.</p>
-      <div class="tp-entry">
-        <button class="tp-entry-card" data-go="budget"><span class="ico">🎯</span><b>Saya punya budget</b><span>Masukkan budget per pcs, kami rekomendasikan base, bahan aktif, kemasan & jumlah order.</span></button>
-        <button class="tp-entry-card" data-start-build><span class="ico">🧪</span><b>Rakit sendiri</b><span>Pilih sendiri base, bahan aktif dan kemasan. Harga dihitung otomatis setiap kali kamu memilih.</span></button>
+    return `<section class="fx-hero">
+      <div class="fx-copy">
+        <span class="fx-tag">● LINI PRODUKSI AKTIF · harga transparan</span>
+        <h1>Selamat datang di <span>pabrik</span> brand kamu</h1>
+        <p>Rancang produk skincare & personal care mulai ${MOQ} pcs. Pilih formula, bahan aktif dan kemasan — harga setiap komponen langsung terlihat. Makin banyak produksi, makin murah.</p>
+        <div class="tp-entry">
+          <button class="tp-entry-card" data-go="budget"><span class="ico">🎯</span><b>Saya punya budget</b><span>Masukkan budget per pcs, kami siapkan rekomendasi formula, kemasan & jumlah produksi.</span><em>Mulai →</em></button>
+          <button class="tp-entry-card" data-start-build><span class="ico">🧪</span><b>Rakit sendiri</b><span>Masuk ke lini produksi: pilih base, bahan aktif dan kemasan sendiri.</span><em>Masuk lini →</em></button>
+        </div>
       </div>
+      <div class="fx-stage">${factoryScene()}</div>
     </section>
     <section class="card tp-tiers">
-      <h3 style="margin-top:0">Harga bertingkat: makin banyak, makin murah</h3>
+      <div class="st-head"><span class="st-no">📊</span><div><small>PAPAN KAPASITAS PRODUKSI</small><h3>Harga bertingkat: makin banyak, makin murah</h3></div></div>
       <div class="table-wrap"><table class="tbl">
-        <thead><tr><th>Jumlah order</th><th class="num">Harga base</th><th class="num">Sticker / pcs</th><th class="num">BPOM & Lab</th><th class="num">Halal</th></tr></thead>
+        <thead><tr><th>Jumlah produksi</th><th class="num">Harga base</th><th class="num">Sticker / pcs</th><th class="num">BPOM & Lab</th><th class="num">Halal</th></tr></thead>
         <tbody>${TIERS.map((t, i) => `<tr><td><b>${tierLabel(t, i)}</b></td><td class="num">${t.base < 1 ? `hemat ${Math.round((1 - t.base) * 100)}%` : "normal"}</td>
           <td class="num">${rp(t.sticker)}</td><td class="num">${t.bpom ? rp(t.bpom) : '<b class="ok">GRATIS</b>'}</td><td class="num">${rp(t.halal)}</td></tr>`).join("")}
           <tr><td><b>&gt; ${MAXQ.toLocaleString("id-ID")} pcs</b></td><td class="num" colspan="4">Hubungi admin</td></tr></tbody>
       </table></div>
-      <p class="small muted" style="margin:8px 0 0">Harga bahan aktif & kemasan juga turun di jumlah order yang lebih besar. Sample ${rp(PP.fees.sample)} / SKU (incl. PPN).</p>
+      <p class="small muted" style="margin:8px 0 0">Harga bahan aktif & kemasan juga turun di jumlah produksi yang lebih besar. Sample ${rp(PP.fees.sample)} / SKU (incl. PPN).</p>
       ${nego()}
     </section>`;
   }
@@ -242,7 +282,7 @@
     const concerns = [{ id: "", name: "Tanpa bahan aktif tambahan" }, ...C.activeCategories].map((c) =>
       `<button class="chip ${q.concern === c.id ? "active" : ""}" data-qconcern="${c.id}">${esc(c.name)}</button>`).join("");
     return `<div class="tp-narrow">
-      <h2 class="tp-h">Cari produk dari budget</h2>
+      <h2 class="tp-h"><small>RUANG PERENCANAAN</small>Cari produk dari budget</h2>
       <p class="muted">Isi budget per pcs (sudah termasuk biaya BPOM & Halal yang dibagi ke semua pcs). Kami hitung kombinasi dan jumlah order yang paling pas.</p>
       <div class="card">
         <div class="field"><label>1. Kategori produk</label><div class="chips" style="margin:0">${cats}</div></div>
@@ -323,7 +363,7 @@
       if (fit.length && fit[0].qty > WEBQ) tips.push(`🤝 Jumlah di atas ${WEBQ} pcs akan dibantu langsung oleh CS Business Development MaklonGo.`);
       if (!fit.length) tips.unshift(`⚠️ Budget ${rp(X)}/pcs belum cukup, bahkan untuk ${MAXQ.toLocaleString("id-ID")} pcs. Coba naikkan budget, pilih volume lebih kecil, atau bawa kemasan/sticker sendiri.`);
     }
-    return `<div class="row between" style="margin:18px 0 6px"><h2 class="tp-h" style="margin:0">Rekomendasi untuk budget ${rp(X)}/pcs</h2><button class="btn btn-ghost btn-sm" data-go="budget">← Ubah budget</button></div>
+    return `<div class="row between" style="margin:18px 0 6px"><h2 class="tp-h" style="margin:0"><small>REKOMENDASI LINI PRODUKSI</small>Untuk budget ${rp(X)}/pcs</h2><button class="btn btn-ghost btn-sm" data-go="budget">← Ubah budget</button></div>
       <p class="muted small">${esc((IDX.baseCats[q.cat] || {}).name || "")}${q.concern ? " · fokus " + esc((IDX.activeCats[q.concern] || {}).name) : ""}${q.total ? ` · total budget ${rp(q.total)}` : ""}${q.ownPack ? " · bawa kemasan sendiri" : ""}${q.ownSticker ? " · bawa sticker sendiri" : ""}. ${fit.length} dari ${lastRecs.length} base sesuai budget.</p>
       ${tips.length ? `<div class="card tp-tips">${tips.map((t) => `<p>${t}</p>`).join("")}${nego()}</div>` : ""}
       <div class="tp-recs">${shown.map(recCard).join("") || '<div class="card muted">Belum ada base di kategori ini.</div>'}</div>
@@ -346,14 +386,15 @@
     const t = tierOf(q), ti = TIERS.indexOf(t);
     return `<div class="tp-build">
       <div class="tp-main">
-        <div class="row between" style="margin:16px 0 4px"><h2 class="tp-h" style="margin:0">Rakit produk</h2><button class="btn btn-ghost btn-sm" data-act="changebase">Ganti base</button></div>
-        <section class="card tp-sec"><h3>1. Base</h3>
+        <div class="row between" style="margin:16px 0 4px"><h2 class="tp-h" style="margin:0">Lini produksi</h2><button class="btn btn-ghost btn-sm" data-act="changebase">Ganti base</button></div>
+        ${stationRail()}
+        <section class="card tp-sec" id="st1">${stHead(1, "Tangki formulasi", "Base produk", true)}
           <div class="tp-basehead"><div><b>${esc(b.name)}</b><div class="small muted">${esc(b.desc || "")}</div>
           ${(b.actives || []).length ? `<div class="small" style="margin-top:4px">Sudah mengandung: ${esc(window.MG.baseActives(b, d.variant).join(", "))}</div>` : ""}</div>
           <div class="tp-price">${rp(PP.bases[b.id] * t.base)}<small>/ ${b.unit}</small></div></div>
           ${variants.length ? `<div class="chips" style="margin:10px 0 0">${variants.map((x) => `<button class="chip ${d.variant === x.name ? "active" : ""}" data-bvar="${esc(x.name)}">${esc(x.name)}</button>`).join("")}</div>` : ""}
         </section>
-        <section class="card tp-sec"><h3>2. Jumlah & volume</h3>
+        <section class="card tp-sec" id="st2">${stHead(2, "Perencanaan batch", "Jumlah & volume", true)}
           <div class="field" style="margin:0 0 14px"><label for="bQty">Jumlah (pcs) · min. ${MOQ}</label>
             <div class="stepper"><button data-bqty="-10">−</button><input id="bQty" type="number" min="${MOQ}" max="${MAXQ}" step="10" value="${d.qty}"><button data-bqty="10">+</button></div>
             <div class="chips" style="margin-top:8px">${[50, 100, 300, 500, 1000, 5000, 10000, 25000].map((n) => `<button class="chip ${q === n ? "active" : ""}" data-bqtyset="${n}">${n.toLocaleString("id-ID")}</button>`).join("")}</div>
@@ -361,11 +402,12 @@
           <label style="font-weight:700;font-size:13.5px">Volume per produk</label>
           <div class="vol-grid" style="margin-top:6px">${volChips}</div>
         </section>
-        <section class="card tp-sec"><h3>3. Bahan aktif tambahan <span class="muted small">(dosis 1%, harga per pcs untuk ${vlabel(v)} ${b.unit} @ ${q.toLocaleString("id-ID")} pcs)</span></h3>
+        <section class="card tp-sec" id="st3">${stHead(3, "Lab bahan aktif", "Bahan aktif tambahan", d.actives.length ? true : "opsional")}
+          <p class="small muted" style="margin:-4px 0 10px">Dosis 1% per bahan · harga per pcs untuk ${vlabel(v)} ${b.unit} @ ${q.toLocaleString("id-ID")} pcs</p>
           <div class="chips">${actCats.map((c) => `<button class="chip ${S.ui.actCat === c.id ? "active" : ""}" data-bactcat="${c.id}">${esc(c.name)}</button>`).join("")}</div>
           <div class="tp-acts">${acts.map((a) => { const on = d.actives.includes(a.id); return `<button class="tp-act ${on ? "on" : ""}" data-bact="${a.id}"><span class="check">${on ? "✓" : ""}</span><span class="n">${esc(a.name)}</span><span class="p">+${rp(actP(a.id, v, q))}</span></button>`; }).join("")}</div>
         </section>
-        <section class="card tp-sec"><h3>4. Kemasan ${vlabel(v)} ${b.unit}</h3>
+        <section class="card tp-sec" id="st4">${stHead(4, "Filling & kemasan", `Kemasan ${vlabel(v)} ${b.unit}`, !!d.pack)}
           <div class="tp-packopts">
             <button class="tp-act ${d.pack === "own" ? "on" : ""}" data-bpack="own"><span class="check">${d.pack === "own" ? "✓" : ""}</span><span class="n"><b>Bawa kemasan sendiri</b></span><span class="p">Rp 0</span></button>
             <button class="tp-act ${d.pack === "admin" ? "on" : ""}" data-bpack="admin"><span class="check">${d.pack === "admin" ? "✓" : ""}</span><span class="n"><b>Admin bantu carikan</b></span><span class="p">menyusul</span></button>
@@ -377,7 +419,7 @@
             <div class="body"><div class="code">${esc(p.code)}</div><div class="name">${esc(p.name)}</div><div class="meta">${esc(p.variasi && p.variasi !== "-" ? p.variasi : "")}</div></div></button>`; }).join("") || `<p class="muted small">Belum ada kemasan ${vlabel(v)} ${b.unit} yang cocok. Pilih "bawa sendiri" / "admin carikan", atau centang tampilkan semua jenis.</p>`}</div>
           ${packs.length > S.ui.packLimit ? `<button class="btn btn-ghost load-more" data-act="morepack">Tampilkan lebih banyak (${packs.length - S.ui.packLimit})</button>` : ""}
         </section>
-        <section class="card tp-sec"><h3>5. Sticker, legalitas & sample</h3>
+        <section class="card tp-sec" id="st5">${stHead(5, "Labeling, legal & QC", "Sticker, legalitas & sample", true)}
           <div class="tp-packopts">
             <button class="tp-act ${d.sticker !== "own" ? "on" : ""}" data-bstick="ours"><span class="check">${d.sticker !== "own" ? "✓" : ""}</span><span class="n"><b>Sticker dari MaklonGo</b></span><span class="p">${rp(t.sticker)}/pcs</span></button>
             <button class="tp-act ${d.sticker === "own" ? "on" : ""}" data-bstick="own"><span class="check">${d.sticker === "own" ? "✓" : ""}</span><span class="n"><b>Bawa sticker sendiri</b></span><span class="p">Rp 0</span></button>
@@ -392,13 +434,20 @@
     </div>`;
   }
 
+  const stHead = (n, station, title, ok) => `<div class="st-head"><span class="st-no">0${n}</span><div><small>STASIUN ${station.toUpperCase()}</small><h3>${title}</h3></div>
+    <span class="st-ok ${ok === true ? "on" : ""}">${ok === true ? "✓ siap" : ok === "opsional" ? "opsional" : "belum"}</span></div>`;
+  function stationRail() {
+    const d = S.d;
+    const st = [["Formulasi", true], ["Batch", true], ["Lab aktif", d.actives.length ? true : "opt"], ["Filling", !!d.pack], ["Label/QC", true]];
+    return `<nav class="st-rail">${st.map(([n, ok], i) => `<a href="#st${i + 1}" class="${ok === true ? "on" : ok === "opt" ? "opt" : ""}"><i>0${i + 1}</i><span>${n}</span></a>`).join('<b class="st-pipe"></b>')}</nav>`;
+  }
   const canSave = (d) => d.pack && Number(d.qty) >= MOQ && Number(d.qty) <= MAXQ;
   function summaryHtml() {
     const d = S.d, b = IDX.bases[d.baseId], c = priceOf(d), X = Number(S.q.perPcs) || 0;
     const pk = d.pack && d.pack !== "own" && d.pack !== "admin" ? IDX.packaging[d.pack] : null;
     const pct = X ? Math.min(100, (c.allIn / X) * 100) : 0;
-    return `<div class="card tp-sum">
-      <h3 style="margin-top:0">Rincian harga <span class="small muted">@ ${c.qty.toLocaleString("id-ID")} pcs</span></h3>
+    return `<div class="card tp-sum wo">
+      <div class="wo-head"><div><small>WORK ORDER · ESTIMASI</small><b>WO-${esc(d.baseId)}-${vlabel(d.vol)}${b.unit.toUpperCase()}-${String(c.qty).padStart(5, "0")}</b></div><span class="wo-stamp">${c.qty.toLocaleString("id-ID")} pcs</span></div>
       <table class="tp-lines">
         <tr><td>Base ${vlabel(d.vol)} ${b.unit}</td><td>${rp(c.base)}</td></tr>
         ${c.acts.map((a) => `<tr><td>+ ${esc(a.name)}</td><td>${rp(a.v)}</td></tr>`).join("")}
@@ -425,7 +474,7 @@
   function viewPickBase() {
     const cat = S.ui.pickCat || S.q.cat || "face";
     const list = basesPriced().filter((b) => b.cat === cat);
-    return `<h2 class="tp-h" style="margin-top:18px">Pilih base produk</h2>
+    return `<h2 class="tp-h" style="margin-top:18px"><small>STASIUN 01 · TANGKI FORMULASI</small>Pilih base produk</h2>
       <div class="chips">${C.baseCategories.map((c) => `<button class="chip ${cat === c.id ? "active" : ""}" data-pickcat="${c.id}">${c.icon || ""} ${esc(c.name)}</button>`).join("")}</div>
       <div class="tp-bases">${list.map((b) => `<button class="option" data-pickbase="${b.id}"><div class="row between" style="align-items:flex-start;flex-wrap:nowrap"><div><div class="title">${esc(b.name)}</div><div class="sub">${esc(b.form)} · ${esc(b.desc || "")}</div></div>
         <div class="tp-price">${rp(baseP(b, b.vol))}<small>${vlabel(b.vol)} ${b.unit}</small></div></div></button>`).join("")}</div>`;
@@ -433,7 +482,7 @@
 
   function viewCart() {
     const sum = S.cart.reduce((s, d) => s + priceOf(d).total, 0);
-    return `<div class="tp-narrow"><h2 class="tp-h" style="margin-top:18px">SKU saya</h2>
+    return `<div class="tp-narrow"><h2 class="tp-h" style="margin-top:18px"><small>ANTREAN PRODUKSI</small>SKU saya</h2>
       ${S.cart.map((d, i) => { const b = IDX.bases[d.baseId] || {}, c = priceOf(d); return `<div class="card" style="margin-bottom:10px">
         <div class="row between"><b>SKU ${i + 1}: ${esc(d.productName || b.name)}</b><b>${rp(c.total)}</b></div>
         <div class="small muted">${esc(b.name)}${d.variant ? " (" + esc(d.variant) + ")" : ""} · ${vlabel(d.vol)} ${b.unit} × ${Number(d.qty).toLocaleString("id-ID")} pcs · ${rp(c.unit)}/pcs · total per pcs ${rp(c.allIn)}</div>
@@ -449,17 +498,17 @@
     const big = S.cart.some((d) => Number(d.qty) > WEBQ);
     const f = (k, label, type = "text", ph = "") => `<div class="field"><label for="c-${k}">${label} <span class="req">*</span></label><input id="c-${k}" type="${type}" value="${esc(c[k] || "")}" placeholder="${ph}"></div>`;
     const pr = S.profile;
-    return `<div class="tp-narrow"><h2 class="tp-h" style="margin-top:18px">Data pemesan</h2><div class="card">
+    return `<div class="tp-narrow"><h2 class="tp-h" style="margin-top:18px"><small>KIRIM PERMINTAAN PENAWARAN</small>Data pemesan</h2><div class="card">
       <dl class="kv" style="margin:0 0 14px"><dt>Nama</dt><dd>${esc(pr.name)}</dd><dt>WhatsApp</dt><dd>+${esc(pr.phone)} ${pr.verified ? '<span class="tag green">terverifikasi</span>' : ""}</dd>
         <dt>Email</dt><dd>${esc(pr.email)}</dd><dt>Instagram</dt><dd>${esc(pr.ig)}</dd><dt>Brand</dt><dd>${esc(pr.brand)}</dd></dl>
       ${f("city", "Kota")}
       <div class="field"><label for="c-brandNote">Konsep brand <span class="req">*</span></label><textarea id="c-brandNote" placeholder="Target pasar, konsep, kisaran harga jual…">${esc(c.brandNote || "")}</textarea></div>
       <div class="notice small">Harga di web adalah estimasi berdasarkan harga katalog dan <b>bisa nego / disesuaikan kembali</b> bersama admin. Invoice & MoU resmi dikirim via WhatsApp. DP 50%, pelunasan + ongkir setelah NIE BPOM terbit.${big ? ` Pesanan di atas ${WEBQ} pcs dikirim ke <b>CS Business Development MaklonGo</b>.` : ""}</div>
-      <button class="btn btn-primary btn-block btn-lg" data-act="send" style="margin-top:14px">Kirim pesanan via WhatsApp</button></div></div>`;
+      <button class="btn btn-primary btn-block btn-lg" data-act="send" style="margin-top:14px">Kirim permintaan penawaran via WhatsApp</button></div></div>`;
   }
 
   function viewSent() {
-    return `<div class="tp-narrow card" style="margin-top:24px;text-align:center"><h2>Pesanan terkirim 🎉</h2><p class="muted">No. order <b>${esc(S.lastId || "")}</b>. Admin akan mengirim invoice & MoU melalui WhatsApp.</p>
+    return `<div class="tp-narrow card" style="margin-top:24px;text-align:center"><h2>Permintaan penawaran terkirim 🎉</h2><p class="muted">No. order <b>${esc(S.lastId || "")}</b>. Admin akan mengirim invoice & MoU melalui WhatsApp.</p>
       <button class="btn btn-ghost" data-go="home">Kembali ke awal</button></div>`;
   }
 
