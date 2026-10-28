@@ -270,3 +270,6 @@ body.tp .pack .vol { background: var(--slate); color: var(--accent); font-family
 .tp-alt .v small { display: block; font-weight: 500; color: var(--muted); font-family: var(--font); font-size: 10.5px; }
 .tp-advisor .tp-rec-note { margin-top: 10px; }
 .tp-alt .t small.r { display: block; color: #134e4a; font-size: 11px; margin-top: 3px; line-height: 1.35; }
+.tp-feetag { display: inline-block; vertical-align: middle; font-family: var(--mono); font-size: 11px; font-weight: 700; background: var(--accent-soft); color: #6b4c00; border: 1px dashed #e8c76a; border-radius: 6px; padding: 3px 7px; margin-left: 6px; }
+#f-fees .err { color: var(--danger); font-size: 12.5px; margin-top: 4px; }
+#f-fees.invalid .tp-act { border-color: var(--danger); }

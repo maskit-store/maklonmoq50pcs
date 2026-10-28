@@ -60,6 +60,12 @@
     const total = unit * qty + fees + sample;
     return { base, acts, pack, sticker, unit, qty, bpom: t.bpom, halal: t.halal, fees, sample, total, allIn: qty ? (unit * qty + fees) / qty : 0, tier: t };
   }
+  // Budget klien termasuk BPOM & Halal? (ya → biaya dibagi ke semua pcs; belum → dibandingkan dengan harga produksi saja)
+  const inclFees = (q = S.q) => q.feesIncl !== false;
+  const per = (pr, q) => (inclFees(q) ? pr.allIn : pr.unit);
+  const totOf = (pr, q) => (inclFees(q) ? pr.total : pr.unit * pr.qty);
+  const perLabel = (q) => (inclFees(q) ? "Total per pcs (incl. BPOM & Halal)" : "Harga per pcs (di luar BPOM & Halal)");
+
   // Daftar qty yang dicoba saat mencari jumlah order yang pas
   const QLIST = (() => { const a = []; for (let q = 50; q < 500; q += 10) a.push(q); for (let q = 500; q < 1000; q += 50) a.push(q);
     for (let q = 1000; q < 5000; q += 250) a.push(q); for (let q = 5000; q <= 25000; q += 500) a.push(q); return a; })();
@@ -97,12 +103,12 @@
 
   // Pilih opsi yang beragam: maksimal 1 per jenis perlakuan bahan aktif dulu (tanpa / 1 aktif / formula tetap), lalu sisanya
   function diverse(list, k = 3) {
-    const sorted = list.slice().sort((x, y) => (x.qty - y.qty) || (x.pr.allIn - y.pr.allIn));
+    const sorted = list.slice().sort((x, y) => (x.qty - y.qty) || (per(x.pr) - per(y.pr)));
     const grp = (c) => (c.sig.includes("a0") ? "a0" : c.sig.includes("a1") ? "a1" : "a");
     const out = [], seen = new Set();
     sorted.forEach((c) => { if (out.length < k && !seen.has(grp(c))) { seen.add(grp(c)); out.push(c); } });
     sorted.forEach((c) => { if (out.length < k && !out.includes(c)) out.push(c); });
-    return out.sort((x, y) => (x.qty - y.qty) || (x.pr.allIn - y.pr.allIn));
+    return out.sort((x, y) => (x.qty - y.qty) || (per(x.pr) - per(y.pr)));
   }
 
   // Cari rencana produksi termurah-kompromi yang masuk budget untuk 1 base
@@ -111,7 +117,7 @@
     const inBase = (a) => (b.actives || []).some((x) => x.toLowerCase().includes(a.name.toLowerCase().split(" ")[0]));
     const pool = q.concern ? C.actives.filter((a) => a.cats.includes(q.concern) && PP.actives[a.id] && !inBase(a)) : [];
     const reqN = Math.min(2, pool.length);
-    const fits = (d, n) => { const p = priceOf(d, n); return (!X || p.allIn <= X) && (!T || p.total <= T); };
+    const fits = (d, n) => { const p = priceOf(d, n); return (!X || per(p, q) <= X) && (!T || totOf(p, q) <= T); };
     const bestQty = (d) => {
       if (T) { let best = null; QLIST.forEach((n) => { if (fits(d, n)) best = n; }); return best; }
       return QLIST.find((n) => fits(d, n)) || null;
@@ -141,7 +147,7 @@
     const best = all[0];
     // Opsi lain: strategi berbeda (mis. tanpa bahan aktif, kemasan sendiri) — yang terbaik per strategi, utamakan qty lebih kecil
     const bySig = {};
-    all.forEach((c) => { if (c.sig !== best.sig && (!bySig[c.sig] || c.qty < bySig[c.sig].qty || (c.qty === bySig[c.sig].qty && c.pr.allIn < bySig[c.sig].pr.allIn))) bySig[c.sig] = c; });
+    all.forEach((c) => { if (c.sig !== best.sig && (!bySig[c.sig] || c.qty < bySig[c.sig].qty || (c.qty === bySig[c.sig].qty && per(c.pr) < per(bySig[c.sig].pr)))) bySig[c.sig] = c; });
     best.allAlts = Object.values(bySig);
     best.alts = diverse(best.allAlts);
     return best;
@@ -182,7 +188,8 @@
   const go = (v) => { S.view = v; persist(); render(); scrollTo({ top: 0 }); };
 
   /* ------------------------------------------------------------ views */
-  const nego = () => `<div class="tp-nego">💬 <b>Harga bisa nego</b> langsung ke admin atau disesuaikan kembali dengan kebutuhanmu.
+  const nego = () => `<div class="tp-nego">💬 <b>Harga belum final — bisa nego & didiskusikan lagi</b> dengan tim <b>Business Development MaklonGo</b>, termasuk penyesuaian formula, kemasan, jumlah produksi dan skema pembayaran.
+    <a href="${window.MG.waLink(BD_WA, "Halo tim Business Development MaklonGo, saya ingin diskusi / nego harga maklon.")}" target="_blank" rel="noopener">Chat Business Development →</a> ·
     <a href="${window.MG.waLink(CFG.adminWhatsApp, "Halo admin MaklonGo, saya mau nego / konsultasi harga maklon.")}" target="_blank" rel="noopener">Chat admin →</a></div>`;
   const tierLabel = (t, i) => { const nx = TIERS[i + 1]; return nx ? `${t.min.toLocaleString("id-ID")}–${(nx.min - 1).toLocaleString("id-ID")} pcs` : `${t.min.toLocaleString("id-ID")} pcs`; };
 
@@ -352,16 +359,24 @@
         <div class="field"><label>1. Kategori produk</label><div class="chips" style="margin:0">${cats}</div></div>
         <div class="field"><label for="qPer">2. Budget per pcs (Rp) <span class="req">*</span></label>
           <input id="qPer" type="number" inputmode="numeric" min="0" step="1000" placeholder="Contoh: 75000" value="${esc(q.perPcs)}">
-          <div class="hint">Harga modal per pcs yang kamu inginkan, termasuk BPOM & Halal.</div></div>
+          <div class="hint">Harga modal per pcs yang kamu inginkan.</div></div>
+        <div class="field ${S.ui.needFees ? "invalid" : ""}" id="f-fees"><label>Apakah budget per pcs itu <u>sudah termasuk</u> biaya BPOM & Halal? <span class="req">*</span></label>
+          <div class="tp-packopts">
+            <label class="tp-act ${q.feesIncl === true ? "on" : ""}"><input type="radio" name="qFees" value="1" data-qfees="1" ${q.feesIncl === true ? "checked" : ""} hidden><span class="check">${q.feesIncl === true ? "✓" : ""}</span><span class="n"><b>Sudah termasuk</b><br><span class="small muted">BPOM & Halal dibagi ke semua pcs</span></span></label>
+            <label class="tp-act ${q.feesIncl === false ? "on" : ""}"><input type="radio" name="qFees" value="0" data-qfees="0" ${q.feesIncl === false ? "checked" : ""} hidden><span class="check">${q.feesIncl === false ? "✓" : ""}</span><span class="n"><b>Belum termasuk</b><br><span class="small muted">BPOM & Halal dibayar terpisah per SKU</span></span></label>
+          </div>
+          <div class="hint">BPOM & Lab ${rp(TIERS[0].bpom)} (gratis mulai 1.000 pcs) + Halal ${rp(TIERS[0].halal)} per SKU.</div>
+          ${S.ui.needFees ? '<div class="err">Pilih salah satu dulu.</div>' : ""}</div>
         <div class="field"><label for="qTot">Total budget (Rp, opsional)</label>
           <input id="qTot" type="number" inputmode="numeric" min="0" step="100000" placeholder="Contoh: 15000000" value="${esc(q.total)}">
-          <div class="hint">Jika diisi, jumlah pcs dihitung agar muat di total budget ini.</div></div>
+          <div class="hint">Jika diisi, jumlah pcs dihitung agar muat di total budget ini (mengikuti pilihan termasuk / belum termasuk BPOM & Halal di atas).</div></div>
         <div class="field"><label>3. Fokus manfaat (opsional)</label><div class="chips" style="margin:0">${concerns}</div></div>
         <div class="field" style="margin-bottom:6px"><label>4. Mau lebih hemat?</label>
           <label class="checkrow ${q.ownPack ? "on" : ""}"><input type="checkbox" data-qopt="ownPack" ${q.ownPack ? "checked" : ""}><span><b>Saya bawa kemasan sendiri</b><span class="small muted">Biaya kemasan tidak dihitung.</span></span></label>
           <label class="checkrow ${q.ownSticker ? "on" : ""}" style="margin-top:8px"><input type="checkbox" data-qopt="ownSticker" ${q.ownSticker ? "checked" : ""}><span><b>Saya bawa sticker / label sendiri</b><span class="small muted">Hemat ${rp(stickerP(MOQ))} / pcs (order ${MOQ}–499 pcs).</span></span></label>
         </div>
         <button class="btn btn-primary btn-block btn-lg" data-act="recommend" style="margin-top:12px">Lihat rekomendasi →</button>
+        ${nego()}
       </div></div>`;
   }
 
@@ -369,20 +384,20 @@
   function ladderHtml(d, compact) {
     const cur = priceOf(d);
     const rows = ladder(Number(d.qty) || MOQ).map((n) => ({ n, p: priceOf(d, n) }));
-    const max = Math.max(...rows.map((r) => r.p.allIn));
+    const max = Math.max(...rows.map((r) => per(r.p)));
     const last = rows[rows.length - 1];
-    const gap = cur.allIn - last.p.allIn;
-    const pct = (p) => Math.max(0, Math.round((1 - p.allIn / cur.allIn) * 100));
+    const gap = per(cur) - per(last.p);
+    const pct = (p) => Math.max(0, Math.round((1 - per(p) / per(cur)) * 100));
     const head = rows.length > 1
-      ? `<div class="tp-gap">Pesan <b>${last.n.toLocaleString("id-ID")} pcs</b> = <b>${rp(last.p.allIn)}/pcs</b>, <b class="ok">${pct(last.p)}% lebih murah</b> dari ${cur.qty.toLocaleString("id-ID")} pcs (selisih ${rp(gap)}/pcs)</div>` : "";
+      ? `<div class="tp-gap">Pesan <b>${last.n.toLocaleString("id-ID")} pcs</b> = <b>${rp(per(last.p))}/pcs</b>, <b class="ok">${pct(last.p)}% lebih murah</b> dari ${cur.qty.toLocaleString("id-ID")} pcs (selisih ${rp(gap)}/pcs)</div>` : "";
     return `<div class="tp-ladder ${compact ? "compact" : ""}">
       ${compact ? "" : "<h4>📉 Harga bertingkat: makin banyak, makin murah</h4>"}${head}
       <div class="tp-ladrows">${rows.map(({ n, p }) => `<div class="tp-ladrow ${n === cur.qty ? "cur" : ""}" ${compact ? "" : `data-ladq="${n}"`} title="Total ${rp(p.total)}">
         <span class="q">${n.toLocaleString("id-ID")} pcs</span>
-        <span class="bar"><i style="width:${Math.max(4, (p.allIn / max) * 100)}%"></i></span>
-        <span class="v">${rp(p.allIn)}</span>
+        <span class="bar"><i style="width:${Math.max(4, (per(p) / max) * 100)}%"></i></span>
+        <span class="v">${rp(per(p))}</span>
         <span class="h">${n === cur.qty ? (compact ? "" : "pilihanmu") : `−${pct(p)}%`}</span></div>`).join("")}</div>
-      ${compact ? "" : `<div class="small muted">Harga per pcs sudah termasuk BPOM & Halal. Klik baris untuk memakai jumlah tersebut. Di atas ${MAXQ.toLocaleString("id-ID")} pcs hubungi admin.</div>`}</div>`;
+      ${compact ? "" : `<div class="small muted">Harga per pcs ${inclFees() ? "sudah termasuk BPOM & Halal" : "di luar BPOM & Halal (dibayar terpisah per SKU)"}. Klik baris untuk memakai jumlah tersebut. Di atas ${MAXQ.toLocaleString("id-ID")} pcs hubungi admin.</div>`}</div>`;
   }
 
   function recCard(r, i) {
@@ -401,15 +416,16 @@
       </div>
       <table class="tp-lines">${lines.map(([n, v]) => `<tr><td>${n}</td><td>${rp(v)}</td></tr>`).join("")}
         <tr class="sub"><td>Harga produksi / pcs</td><td>${rp(p.unit)}</td></tr>
-        <tr><td>BPOM ${p.bpom ? "" : "(gratis) "}& Halal ÷ ${r.qty.toLocaleString("id-ID")} pcs</td><td>${rp(p.fees / r.qty)}</td></tr>
-        <tr class="tot"><td>Total per pcs</td><td>${rp(p.allIn)}</td></tr>
+        ${inclFees() ? `<tr><td>BPOM ${p.bpom ? "" : "(gratis) "}& Halal ÷ ${r.qty.toLocaleString("id-ID")} pcs</td><td>${rp(p.fees / r.qty)}</td></tr>
+        <tr class="tot"><td>Total per pcs</td><td>${rp(p.allIn)}</td></tr>` : `<tr class="tot"><td>Harga per pcs</td><td>${rp(p.unit)}</td></tr>
+        <tr><td class="small muted">+ BPOM ${p.bpom ? "" : "(gratis) "}& Halal, dibayar terpisah</td><td class="small muted">${rp(p.fees)}/SKU</td></tr>`}
       </table>
       ${r.why && r.why.length ? `<div class="tp-why"><div class="tp-why-tags">${r.why.map((w) => `<span>${w.tag}</span>`).join("")}</div><ul>${r.why.map((w) => `<li>${w.why}</li>`).join("")}</ul></div>` : ""}
       ${r.note ? `<div class="tp-rec-note">${r.note}</div>` : ""}
       ${r.alts && r.alts.length ? `<div class="tp-alts"><div class="small"><b>Opsi lain untuk produk ini</b></div>${r.alts.map((a, j) => `<button class="tp-alt" data-usealt="${i}:${j}">
-        <span class="t">${(() => { const w = explain(a, S.q); const act = w.find((x) => /^🧪/.test(x.tag)); return `${w.map((x) => x.tag).join(" · ") || "Sesuai pilihan"}${act ? `<small class="r">${act.why}</small>` : ""}`; })()}</span><span class="v">${rp(a.pr.allIn)}/pcs<small>${a.qty.toLocaleString("id-ID")} pcs · ${rp(a.pr.total)}</small></span></button>`).join("")}</div>` : ""}
+        <span class="t">${(() => { const w = explain(a, S.q); const act = w.find((x) => /^🧪/.test(x.tag)); return `${w.map((x) => x.tag).join(" · ") || "Sesuai pilihan"}${act ? `<small class="r">${act.why}</small>` : ""}`; })()}</span><span class="v">${rp(per(a.pr))}/pcs<small>${a.qty.toLocaleString("id-ID")} pcs · ${rp(totOf(a.pr))}</small></span></button>`).join("")}</div>` : ""}
       <div class="tp-rec-foot">
-        ${r.fit ? `<div><b>Order ${r.qty.toLocaleString("id-ID")} pcs</b> · total ${rp(p.total)}</div>`
+        ${r.fit ? `<div><b>Order ${r.qty.toLocaleString("id-ID")} pcs</b> · total ${rp(p.total)}${inclFees() ? "" : " <span class='small muted'>(incl. BPOM & Halal)</span>"}</div>`
           : `<div class="flag small">Belum masuk budget, bahkan di ${MAXQ.toLocaleString("id-ID")} pcs</div>`}
         <button class="btn btn-primary btn-sm" data-userec="${i}">Pakai & atur sendiri →</button>
       </div>
@@ -426,12 +442,12 @@
       const exact = planFor(b, q, { noCompromise: true });
       const flex = planFor(b, q);
       // Yang sudah masuk budget tetap diberi opsi lain yang lebih hemat / cukup produksi lebih sedikit
-      if (exact && flex) exact.alts = diverse([flex, ...(flex.allAlts || [])].filter((c) => c.sig && (c.qty < exact.qty || c.pr.allIn < exact.pr.allIn - 500)));
+      if (exact && flex) exact.alts = diverse([flex, ...(flex.allAlts || [])].filter((c) => c.sig && (c.qty < exact.qty || per(c.pr) < per(exact.pr) - 500)));
       const p = exact ? { ...exact, compromise: false } : flex;
       if (p) { p.why = explain(p, q); p.compromise = !!(exact ? false : p.why.some((w) => !/^📈/.test(w.tag))); plans.push(p); }
       else misses.push(b);
     });
-    const direct = plans.filter((p) => !p.compromise).sort((x, y) => (x.qty - y.qty) || (y.d.actives.length - x.d.actives.length) || (x.pr.allIn - y.pr.allIn));
+    const direct = plans.filter((p) => !p.compromise).sort((x, y) => (x.qty - y.qty) || (y.d.actives.length - x.d.actives.length) || (per(x.pr) - per(y.pr)));
     const adjusted = plans.filter((p) => p.compromise).sort((x, y) => (x.score - y.score) || (x.qty - y.qty));
     direct.forEach((p, i) => { if (i === 0) p.badge = "⭐ Paling pas"; });
     adjusted.forEach((p) => { p.badge = "🧠 Dengan penyesuaian"; p.badgeCls = "ok"; });
@@ -441,7 +457,7 @@
       let m = null;
       volsFor(b).filter((v) => FIXED_VOL[b.id] || v >= b.vol * 0.25).forEach((v) => {
         const pr = priceOf({ baseId: b.id, vol: v, actives: [], pack: "own", sticker: "own" }, MAXQ);
-        if (!m || pr.allIn < m.allIn) m = { b, v, allIn: pr.allIn };
+        if (!m || per(pr) < m.allIn) m = { b, v, allIn: per(pr) };
       });
       return m;
     };
@@ -460,22 +476,22 @@
     }
     let byTotal = [];
     if (!count && T) {
-      if (T < feesOf(MOQ) + 1) notes.push(`⚠️ Total ${rp(T)} belum menutup biaya wajib BPOM & Lab + Halal (${rp(feesOf(MOQ))} per SKU). Mulai dari <b>sample (${rp(PP.fees.sample)})</b> dulu sambil menyiapkan modal produksi.`);
-      byTotal = bases.map((b) => planFor(b, { ...q, perPcs: 1e9 })).filter(Boolean).sort((x, y) => x.pr.allIn - y.pr.allIn).slice(0, 3);
+      if (inclFees() && T < feesOf(MOQ) + 1) notes.push(`⚠️ Total ${rp(T)} belum menutup biaya wajib BPOM & Lab + Halal (${rp(feesOf(MOQ))} per SKU)${inclFees() ? "" : " yang dibayar terpisah"}. Mulai dari <b>sample (${rp(PP.fees.sample)})</b> dulu sambil menyiapkan modal produksi.`);
+      byTotal = bases.map((b) => planFor(b, { ...q, perPcs: 1e9 })).filter(Boolean).sort((x, y) => per(x.pr) - per(y.pr)).slice(0, 3);
       byTotal.forEach((p) => { p.why = explain(p, q); p.badge = "💡 Sesuai total budget"; p.badgeCls = "ok"; p.compromise = true; });
       const need = bases.map((b) => planFor(b, { ...q, total: "" })).filter(Boolean).sort((x, y) => x.pr.total - y.pr.total)[0];
-      if (byTotal.length) notes.push(`🧮 Dengan total ${rp(T)}, BPOM & Halal (${rp(feesOf(MOQ))}/SKU) masih terasa besar per pcs. Yang bisa kamu buat: <b>${esc(byTotal[0].b.name)}</b> ${byTotal[0].qty.toLocaleString("id-ID")} pcs seharga ${rp(byTotal[0].pr.allIn)}/pcs — lihat di bawah.`);
+      if (byTotal.length) notes.push(`🧮 Dengan total ${rp(T)}, BPOM & Halal (${rp(feesOf(MOQ))}/SKU) masih terasa besar per pcs. Yang bisa kamu buat: <b>${esc(byTotal[0].b.name)}</b> ${byTotal[0].qty.toLocaleString("id-ID")} pcs seharga ${rp(per(byTotal[0].pr))}/pcs — lihat di bawah.`);
       if (need) notes.push(`🎯 Untuk mencapai ${rp(X)}/pcs, total budget yang dibutuhkan mulai <b>${rp(need.pr.total)}</b> (${esc(need.b.name)}, ${need.qty.toLocaleString("id-ID")} pcs).`);
     }
     const sh = (list, key) => (S.ui[key] ? list : list.slice(0, 6));
     const wa = (t) => window.MG.waLink(CFG.adminWhatsApp, t);
     const ideas = [
-      `💬 <b>Nego langsung dengan admin</b> — harga bisa disesuaikan dengan rencana bisnismu. <a href="${wa(`Halo admin MaklonGo, budget saya ${rp(X)}/pcs untuk ${(IDX.baseCats[q.cat] || {}).name || "produk"}. Mohon dibantu opsi terbaiknya.`)}" target="_blank" rel="noopener">Chat admin →</a>`,
+      `💬 <b>Harga bisa nego</b> — diskusikan budget & rencana bisnismu dengan tim Business Development MaklonGo. <a href="${window.MG.waLink(BD_WA, `Halo tim Business Development MaklonGo, budget saya ${rp(X)}/pcs (${inclFees() ? "sudah" : "belum"} termasuk BPOM & Halal) untuk ${(IDX.baseCats[q.cat] || {}).name || "produk"}. Mohon dibantu opsi terbaiknya.`)}" target="_blank" rel="noopener">Chat Business Development →</a>`,
       `🧴 <b>Mulai dari sample</b> (${rp(PP.fees.sample)} / SKU) untuk tes formula & pasar sebelum produksi massal.`,
       `🎯 <b>Mulai 1 SKU dulu</b>: biaya BPOM & Halal per SKU jadi tidak berlipat. Tambah varian setelah produk pertama laku.`,
       `🤝 <b>Patungan / pre-order</b>: kumpulkan pesanan reseller dulu agar jumlah produksi naik ke tier harga lebih murah.`,
     ];
-    let html = `<div class="row between" style="margin:18px 0 6px"><h2 class="tp-h" style="margin:0"><small>PENASIHAT BUDGET MAKLONGO</small>Budget ${rp(X)}/pcs${q.total ? ` · total ${rp(q.total)}` : ""}</h2><button class="btn btn-ghost btn-sm" data-go="budget">← Ubah budget</button></div>
+    let html = `<div class="row between" style="margin:18px 0 6px"><h2 class="tp-h" style="margin:0"><small>PENASIHAT BUDGET MAKLONGO</small>Budget ${rp(X)}/pcs${q.total ? ` · total ${rp(q.total)}` : ""} <span class="tp-feetag">${inclFees() ? "termasuk BPOM & Halal" : "di luar BPOM & Halal"}</span></h2><button class="btn btn-ghost btn-sm" data-go="budget">← Ubah budget</button></div>
       <div class="card tp-advisor">
         <div class="adv-head"><span class="adv-ico">🧠</span><div>
           <b>${count ? `Kabar baik! Ada ${count} produk ${esc(((IDX.baseCats[q.cat] || {}).name || "").toLowerCase())} yang bisa kamu buat dengan budget ini.` : `Budget ${rp(X)}/pcs masih bisa diwujudkan — ini caranya.`}</b>
@@ -575,7 +591,8 @@
   function summaryHtml() {
     const d = S.d, b = IDX.bases[d.baseId], c = priceOf(d), X = Number(S.q.perPcs) || 0;
     const pk = d.pack && d.pack !== "own" && d.pack !== "admin" ? IDX.packaging[d.pack] : null;
-    const pct = X ? Math.min(100, (c.allIn / X) * 100) : 0;
+    const cv = per(c);
+    const pct = X ? Math.min(100, (cv / X) * 100) : 0;
     return `<div class="card tp-sum wo">
       <div class="wo-head"><div><small>WORK ORDER · ESTIMASI</small><b>WO-${esc(d.baseId)}-${vlabel(d.vol)}${b.unit.toUpperCase()}-${String(c.qty).padStart(5, "0")}</b></div><span class="wo-stamp">${c.qty.toLocaleString("id-ID")} pcs</span></div>
       <table class="tp-lines">
@@ -591,8 +608,8 @@
         <tr class="tot"><td>Total SKU</td><td>${rp(c.total)}</td></tr>
         <tr class="sub"><td>Total per pcs (incl. BPOM & Halal)</td><td>${rp(c.allIn)}</td></tr>
       </table>
-      ${X ? `<div class="tp-meter ${c.allIn > X ? "over" : ""}"><div style="width:${pct}%"></div></div>
-        <div class="small ${c.allIn > X ? "flag" : "muted"}">${c.allIn > X ? `Lebih ${rp(c.allIn - X)}/pcs dari budget ${rp(X)}` : `Masih di bawah budget ${rp(X)}/pcs (sisa ${rp(X - c.allIn)})`}</div>` : ""}
+      ${X ? `<div class="tp-meter ${cv > X ? "over" : ""}"><div style="width:${pct}%"></div></div>
+        <div class="small ${cv > X ? "flag" : "muted"}">${cv > X ? `Lebih ${rp(cv - X)}/pcs dari budget ${rp(X)}` : `Masih di bawah budget ${rp(X)}/pcs (sisa ${rp(X - cv)})`} · budget ${inclFees() ? "termasuk" : "di luar"} BPOM & Halal</div>` : ""}
       ${ladderHtml(d)}
       ${nego()}
       <p class="small muted" style="margin:10px 0 0">DP 50% ${rp(c.total / 2)} · pelunasan + ongkir setelah NIE BPOM terbit. Belum termasuk ongkir.</p>
@@ -660,7 +677,7 @@
     document.body.classList.toggle("has-tpbar", !!show);
     if (!show) return;
     const c = priceOf(S.d), X = Number(S.q.perPcs) || 0;
-    bar.innerHTML = `<div class="container wide"><div><div class="small muted">Per pcs (incl. BPOM & Halal)</div><b class="${X && c.allIn > X ? "flag" : ""}">${rp(c.allIn)}</b>${X ? `<span class="small muted"> / budget ${rp(X)}</span>` : ""}</div>
+    bar.innerHTML = `<div class="container wide"><div><div class="small muted">${inclFees() ? "Per pcs (incl. BPOM & Halal)" : "Per pcs (di luar BPOM & Halal)"}</div><b class="${X && per(c) > X ? "flag" : ""}">${rp(per(c))}</b>${X ? `<span class="small muted"> / budget ${rp(X)}</span>` : ""}</div>
       <div style="text-align:right"><div class="small muted">Total ${c.qty.toLocaleString("id-ID")} pcs</div><b>${rp(c.total)}</b></div>
       <button class="btn btn-primary btn-sm" data-act="savesku" ${canSave(S.d) ? "" : "disabled"}>Simpan</button></div>`;
   }
@@ -773,6 +790,8 @@
       case "recommend": {
         S.q.perPcs = document.getElementById("qPer").value; S.q.total = document.getElementById("qTot").value;
         if (!(Number(S.q.perPcs) > 0)) { toast("Isi budget per pcs dulu"); return; }
+        if (S.q.feesIncl !== true && S.q.feesIncl !== false) { S.ui.needFees = true; rerenderBuild(); document.getElementById("f-fees").scrollIntoView({ block: "center" }); return; }
+        S.ui.needFees = false;
         S.ui.showAll = false; S.ui.showAllOwn = false; return go("results");
       }
       case "showall": S.ui.showAll = true; return rerenderBuild();
@@ -789,6 +808,7 @@
   });
   document.addEventListener("change", (e) => {
     const t = e.target, d = S.d;
+    if (t.dataset.qfees) { S.q.feesIncl = t.dataset.qfees === "1"; S.ui.needFees = false; S.q.perPcs = document.getElementById("qPer").value; S.q.total = document.getElementById("qTot").value; persist(); return rerenderBuild(); }
     if (t.dataset.qopt) { S.q[t.dataset.qopt] = t.checked; t.closest(".checkrow").classList.toggle("on", t.checked); return persist(); }
     if (t.dataset.packall !== undefined) { S.ui.packAll = t.checked; S.ui.packLimit = 12; return rerenderBuild(); }
     if (t.dataset.bsample !== undefined) { d.sample = t.checked; persist(); return rerenderBuild(); }
