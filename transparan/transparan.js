@@ -657,25 +657,19 @@
   function viewSent() {
     const o = S.lastOrder;
     if (!o) return `<div class="tp-narrow card" style="margin-top:24px;text-align:center"><h2>Permintaan penawaran terkirim 🎉</h2><p class="muted">No. order <b>${esc(S.lastId || "")}</b>.</p><button class="btn btn-ghost" data-go="home">Kembali ke awal</button></div>`;
-    const who = o.big ? "tim Business Development" : "CS";
     setTimeout(renderOrderImage, 0);
     return `<div class="tp-sent">
       <div class="card sent-main">
         <span class="fx-tag" style="color:#166534;background:#dcfce7;border-color:#86efac">● PERMINTAAN TERCATAT</span>
         <h2 style="margin:12px 0 4px">Permintaan penawaran terkirim 🎉</h2>
-        <p class="muted" style="margin:0 0 14px">Simpan nomor order ini. Langkah terakhir: konfirmasi ke WhatsApp ${who} MaklonGo dengan salah satu cara di bawah.</p>
-        <div class="sent-no"><small>NO. ORDER</small><b>${esc(o.id)}</b><button class="btn btn-ghost btn-sm" data-act="copyid">Salin</button></div>
-        <div class="sent-opts">
-          <div class="sent-opt"><div class="st-no">1</div><div><b>Sebutkan nomor order</b><p class="small muted">Kirim pesan singkat berisi nomor order. ${who[0].toUpperCase() + who.slice(1)} langsung menemukan rincianmu di sistem.</p>
-            <a class="btn btn-primary btn-block" href="${window.MG.waLink(csWa(o), shortMsg(o))}" target="_blank" rel="noopener">💬 Konfirmasi via WhatsApp (No. Order)</a></div></div>
-          <div class="sent-opt"><div class="st-no">2</div><div><b>Kirim rincian order (gambar JPG)</b><p class="small muted">Gambar rincian lengkap dengan harga, siap dikirim ke WhatsApp ${who}.</p>
-            <button class="btn btn-primary btn-block" data-act="shareimg">📤 Kirim gambar ke WhatsApp</button>
-            <button class="btn btn-ghost btn-block" data-act="saveimg" style="margin-top:8px">⬇️ Simpan rincian (JPG)</button></div></div>
-        </div>
+        <p class="muted" style="margin:0 0 14px">Satu langkah lagi: kirim gambar rincian order ke WhatsApp admin MaklonGo untuk konfirmasi. Admin akan membalas dengan penawaran resmi.</p>
+        <div class="sent-no"><small>NO. ORDER</small><b>${esc(o.id)}</b></div>
+        <button class="btn btn-primary btn-block btn-lg" data-act="shareimg">📤 Kirim rincian order ke WhatsApp admin</button>
+        <p class="small muted" style="margin:8px 0 0;text-align:center">${navigator.canShare ? "Pilih WhatsApp di menu bagikan, lalu kirim ke admin." : "Gambar rincian (JPG) otomatis tersimpan, lalu WhatsApp admin terbuka — lampirkan gambarnya di chat."}</p>
         ${nego()}
         <div class="row" style="margin-top:14px"><button class="btn btn-ghost" data-start-build>+ Rancang produk lain</button><button class="btn btn-ghost" data-go="home">Kembali ke awal</button></div>
       </div>
-      <div class="sent-img"><img id="orderImg" class="loading" alt="Rincian order ${esc(o.id)}"><p class="small muted" style="text-align:center">Pratinjau gambar · di HP bisa tekan lama untuk menyimpan</p></div>
+      <div class="sent-img"><img id="orderImg" class="loading" alt="Rincian order ${esc(o.id)}"><p class="small muted" style="text-align:center">Pratinjau gambar rincian order</p></div>
     </div>`;
   }
 
@@ -779,8 +773,8 @@
   }
 
   /* ---------- konfirmasi: nomor order & gambar rincian (JPG) */
-  const csWa = (o) => (o.big ? BD_WA : CFG.adminWhatsApp);
-  const shortMsg = (o) => `Halo ${o.big ? "tim Business Development" : "admin"} MaklonGo 👋\nSaya ingin konfirmasi permintaan penawaran:\n\n*No. Order: ${o.id}*\nNama: ${o.customer.name}\nBrand: ${o.customer.brand}\nEstimasi: ${rp(o.grand)} (${o.items.length} SKU)\n\nMohon dibantu penawaran resminya. Terima kasih 🙏`;
+  const csWa = () => CFG.adminWhatsApp; // konfirmasi selalu ke WA admin
+
   function orderImage(o) {
     return new Promise((resolve) => {
       const W = 1080, P = 56, cv = document.createElement("canvas"), x = cv.getContext("2d");
@@ -844,7 +838,7 @@
         x.textAlign = "left"; x.fillStyle = "#5d6f76";
         wrap(`Belum termasuk ongkos kirim. Harga estimasi — bisa nego & didiskusikan dengan tim Business Development MaklonGo. DP 50%, pelunasan + ongkir setelah NIE BPOM terbit.`, W - 2 * P, F(500, 20)).forEach((l) => { x.font = F(500, 20); x.fillText(l, P, y); y += 30; });
         y += 14; x.fillStyle = "#0a8a86"; x.font = F(700, 22);
-        x.fillText(`Konfirmasi ke WhatsApp ${o.big ? "Business Development" : "CS"} MaklonGo: +${csWa(o)}`, P, y);
+        x.fillText(`Konfirmasi ke WhatsApp admin MaklonGo: +${csWa(o)}`, P, y);
         cv.toBlob((blob) => resolve({ blob, url: URL.createObjectURL(blob) }), "image/jpeg", 0.92);
       };
       const ready = document.fonts && document.fonts.ready ? document.fonts.ready : Promise.resolve();
@@ -922,7 +916,6 @@
       case "send": return send();
       case "saveimg": return saveImage();
       case "shareimg": return shareImage();
-      case "copyid": navigator.clipboard && navigator.clipboard.writeText(S.lastOrder.id).then(() => toast("Nomor order disalin")); return;
       case "regsubmit": return regSubmit();
       case "otpverify": return otpVerify();
       case "otpresend": return otpResend();
